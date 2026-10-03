@@ -63,6 +63,7 @@ ANTICAPTCHA_KEYS = list(_C.get("anticaptcha_keys") or [])
 _pw = None          # playwright instance
 _browser = None     # CDP browser handle
 _page = None        # tab parked on conol.ai
+LAST_PROVIDER = None  # which solver minted the last successful token
 
 
 def _log(msg: str) -> None:
@@ -228,17 +229,34 @@ def solve_anticaptcha(action: str) -> Optional[str]:
 _SOLVERS = {"chrome_cdp": solve_chrome_cdp, "anticaptcha": solve_anticaptcha}
 
 
-def solve(action: str) -> Optional[str]:
-    """Try each configured provider in order; first non-empty token wins."""
+def solve(action: str, skip: "set|None" = None) -> Optional[str]:
+    """Try each configured provider in order; first non-empty token wins.
+
+    `skip` names providers to bypass this round — used to ESCALATE when the
+    server rejects a token (CAPTCHA_VERIFICATION_FAILED): a freshly-created
+    Chrome profile mints a low reCAPTCHA-v3 score, so we skip chrome_cdp and
+    fall through to the paid AntiCaptcha path instead of burning attempts on
+    tokens the server keeps rejecting. The provider that produced the last
+    token is exposed via LAST_PROVIDER so the caller knows whom to skip.
+    """
+    skip = skip or set()
     for name in PROVIDERS:
+        if name in skip:
+            continue
         fn = _SOLVERS.get(name)
         if fn is None:
             _log("unknown captcha provider %r — skipped" % name)
             continue
         tok = fn(action)
         if tok:
+            global LAST_PROVIDER
+            LAST_PROVIDER = name
             return tok
         _log("provider %s returned nothing for action=%s" % (name, action))
+    # every non-skipped provider failed — retry ignoring the skip list once
+    if skip:
+        _log("all non-skipped providers exhausted; retrying full chain")
+        return solve(action, skip=None)
     return None
 
 

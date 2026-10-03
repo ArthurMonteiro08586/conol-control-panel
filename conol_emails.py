@@ -134,7 +134,11 @@ def _tonline_next() -> Optional[dict]:
 def _gmail_next(tag: str) -> Optional[dict]:
     if not GMAIL or not GMAIL_APP:
         return None
-    addr = "%s+%s@%s" % (GMAIL_PREFIX, tag, GMAIL_DOMAIN)
+    # GMAIL_PREFIX from config may already carry a "+conol" suffix
+    # ("baradok609+conol"); tags are "conol<suffix>" — keep exactly one "+"
+    # so addresses stay "baradok609+conol<suffix>@gmail.com" like the legacy pool.
+    base = GMAIL_PREFIX.split("+")[0]
+    addr = "%s+%s@%s" % (base, tag, GMAIL_DOMAIN)
     return {"address": addr, "password": None, "provider": "gmail",
             "imap_host": "imap.gmail.com", "imap_user": GMAIL, "imap_pass": GMAIL_APP}
 

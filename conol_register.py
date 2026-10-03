@@ -55,10 +55,11 @@ import conol_captcha  # noqa: E402  free chrome_cdp -> paid anticaptcha chain
 import conol_emails   # noqa: E402  gmail plus-alias + t-online.de dedicated boxes
 
 
-def solve_captcha(action: str) -> Optional[str]:
+def solve_captcha(action: str, skip: "set|None" = None) -> Optional[str]:
     """Solve reCAPTCHA v3 through the provider chain (free Chrome CDP first,
-    paid AntiCaptcha fallback). See conol_captcha.py for the order/config."""
-    return conol_captcha.solve(action)
+    paid AntiCaptcha fallback). `skip` escalates past a provider whose token
+    the server just rejected. See conol_captcha.py for the order/config."""
+    return conol_captcha.solve(action, skip=skip)
 
 
 def new_client() -> "requests.Session":
@@ -321,9 +322,11 @@ def register_one(suffix: int, provider: str = None) -> dict:
     email_hops = 0
     MAX_EMAIL_HOPS = 12
     attempt = 0
+    skip_providers = set()
     while attempt < 3:
         attempt += 1
-        captcha = solve_captcha("sign_up")
+        captcha = solve_captcha("sign_up", skip=skip_providers or None)
+        used_provider = conol_captcha.LAST_PROVIDER
         if not captcha:
             log.warning("sign_up captcha solve failed (attempt %d/3)", attempt)
             time.sleep(3)
@@ -364,6 +367,13 @@ def register_one(suffix: int, provider: str = None) -> dict:
             # budget while masking real state.
             log.error("non-captcha rejection — not retrying: %s", err_text[:160])
             return {**result, "captcha_solves": captcha_cost, "error": err_text[:200]}
+        # The server rejected THIS token. Escalate: stop using the provider that
+        # minted it (a fresh Chrome profile scores too low for reCAPTCHA v3) and
+        # let the next attempt fall through to the paid AntiCaptcha path.
+        if "CAPTCHA_VERIFICATION_FAILED" in upper and used_provider:
+            skip_providers.add(used_provider)
+            log.warning("token from %s rejected by server — escalating past it (skip=%s)",
+                        used_provider, sorted(skip_providers))
         time.sleep(5)
     if reg is None:
         return {**result, "captcha_solves": captcha_cost,
