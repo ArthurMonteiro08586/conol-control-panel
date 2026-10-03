@@ -1,0 +1,48 @@
+{
+  "conol": {
+    "base_url": "https://conol.ai",
+    "password": "REPLACE_ME",
+    "site_key": "6Lc3wmAtAAAAAB9YBPXQtT9uGGsH3ul6LQBc5AUu"
+  },
+  "gmail": {
+    "address": "your@gmail.com",
+    "app_password": "REPLACE_ME",
+    "imap_host": "imap.gmail.com",
+    "imap_port": 993
+  },
+  "cdp": {
+    "url": "http://127.0.0.1:9228"
+  },
+  "gateway": {
+    "port": 9999,
+    "api_key": "test",
+    "host": "127.0.0.1"
+  },
+  "registration": {
+    "name_prefix": "Conol",
+    "email_prefix": "baradok609+conol",
+    "email_domain": "gmail.com",
+    "starting_credits": 800,
+    "base_delay_sec": 30,
+    "delay_per_account_sec": 15,
+    "verify_timeout_sec": 180
+  },
+  "quests": {
+    "credit_per_quest": 300,
+    "cooldown_between_accounts_sec": 30,
+    "cooldown_between_quests_sec": 15
+  },
+  "paths": {
+    "accounts_file": "conol_accounts_pool.jsonl",
+    "cookies_dir": ".",
+    "state_file": "conol_pool_state.json",
+    "quest_state_file": "conol_quests_state.json",
+    "gateway_state_file": "conol_gateway_state.json"
+  },
+  "captcha": {
+    "anticaptcha_keys": [
+      "REPLACE_ME_KEY_1",
+      "REPLACE_ME_KEY_2"
+    ]
+  }
+}

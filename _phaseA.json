@@ -1,0 +1,151 @@
+{
+ "probed_at": "2026-10-03T11:34:26Z",
+ "account": "Conol1027068",
+ "results": {
+  "gpt-5.6-luna": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "gufw3u0ivvl1qrxtbq91cu6r",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "claude-haiku-4-5": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "yhz6jdrxpoo919jttaljd7bs",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "deepseek/deepseek-v4-pro": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "b3qkgjit4032j6zth2m7b3b4",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "deepseek/deepseek-v4-flash": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "y62vl71c71mtkj97hmi50dnu",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "z-ai/glm-5.2": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "jzpapiso4n8ea83nuz4rkz1a",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "z-ai/glm-5.1": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "ez6qp44myft4d7jdc6knub50",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "moonshotai/kimi-k2.7-code": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "qp0f72ojbb4arpa6ld18u34z",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "qwen/qwen3.7-plus": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "u6s9afvkug5gnh24imcckmzj",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "qwen/qwen3.7-max": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "p40oj7s3tduvh96s4h7wqw9c",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "google/gemini-3.1-flash-lite": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "j39hfsmfwkms6khxdbwlxptt",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "x-ai/grok-4.3": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "nexsnww2tebhnkoaqr6bhcz6",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "minimax/minimax-m3": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "p8f29mk9vfvougr886ir42k3",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "tencent/hy3": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "thvu2zo84fukdsyh63ft269v",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "stepfun/step-3.7-flash": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "lg0ockji66ionud8dt2jqjzj",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "xiaomi/mimo-v2.5": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "oqldrlezb87v9fd0pyll7ni7",
+   "raw_keys": [
+    "sessionId"
+   ]
+  },
+  "xiaomi/mimo-v2.5-pro": {
+   "http": 201,
+   "downgraded": null,
+   "effective": null,
+   "sid": "nf8en5yse42zbmhwekeufjf0",
+   "raw_keys": [
+    "sessionId"
+   ]
+  }
+ },
+ "http_429": 0
+}

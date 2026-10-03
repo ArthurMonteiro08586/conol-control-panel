@@ -1,0 +1,267 @@
+{
+ "probed_at": "2026-10-03T11:34:26Z",
+ "manifest_written_at": "2026-10-03T12:42:00Z",
+ "method": {
+  "phase_a": "POST /api/sessions only (no inference, no credits) to read modelDowngraded/effectiveModel",
+  "phase_b": "one deterministic inference per id requiring an exact token back",
+  "pass_criterion": "exact-token answer AND chars>0 AND create response carried no modelDowngraded/effectiveModel AND final status=stopped",
+  "positive_control": "gpt-5.5 and claude-opus-4-8 through the identical harness returned the downgrade flags, while honest ids returned only {sessionId}. conol emits those fields solely on downgrade, so their absence is a clean verdict, not missing data.",
+  "id_spellings": "authoritative values from gateway.py CONOL_MODEL_MAP; wrong spellings yield a 201 + sessionId and then zero assistant text, which looks like an unavailable model"
+ },
+ "positive_control": [
+  {
+   "id": "gpt-5.5",
+   "expect": "downgraded",
+   "http": 201,
+   "body": {
+    "sessionId": "wi2f8s83afa1z8rj9rcotgwm",
+    "modelDowngraded": true,
+    "effectiveModel": "claude-haiku-4-5"
+   }
+  },
+  {
+   "id": "claude-opus-4-8",
+   "expect": "downgraded",
+   "http": 201,
+   "body": {
+    "sessionId": "cbk0ks37q1lsjfs5gflkkxyd",
+    "modelDowngraded": true,
+    "effectiveModel": "claude-haiku-4-5"
+   }
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "expect": "clean",
+   "http": 201,
+   "body": {
+    "sessionId": "w6aaq00qwx8c7uooby9bj122"
+   }
+  }
+ ],
+ "honest": [
+  {
+   "id": "claude-haiku-4-5",
+   "chars": 10,
+   "latency_s": 19.2,
+   "events": 26,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "claude-haiku-4-5"
+  },
+  {
+   "id": "deepseek-v4-flash",
+   "chars": 10,
+   "latency_s": 6.1,
+   "events": 4,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "evidence": "RETRY_OK_0 exact",
+   "conol_api_id": "deepseek/deepseek-v4-flash"
+  },
+  {
+   "id": "deepseek-v4-pro",
+   "chars": 10,
+   "latency_s": 6.3,
+   "events": 4,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "deepseek/deepseek-v4-pro"
+  },
+  {
+   "id": "gemini-3.1-flash-lite",
+   "chars": 10,
+   "latency_s": 3.2,
+   "events": 3,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "google/gemini-3.1-flash-lite"
+  },
+  {
+   "id": "glm-5.1",
+   "chars": 10,
+   "latency_s": 6.6,
+   "events": 5,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "z-ai/glm-5.1"
+  },
+  {
+   "id": "glm-5.2",
+   "chars": 10,
+   "latency_s": 7.5,
+   "events": 9,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "z-ai/glm-5.2"
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "chars": 10,
+   "latency_s": 3.9,
+   "events": 4,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "gpt-5.6-luna"
+  },
+  {
+   "id": "grok-4.3",
+   "chars": 11,
+   "latency_s": 5.3,
+   "events": 5,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "x-ai/grok-4.3"
+  },
+  {
+   "id": "hy3",
+   "chars": 11,
+   "latency_s": 7.9,
+   "events": 5,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "tencent/hy3"
+  },
+  {
+   "id": "kimi-k2.7-code",
+   "chars": 11,
+   "latency_s": 12.6,
+   "events": 13,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "moonshotai/kimi-k2.7-code"
+  },
+  {
+   "id": "mimo-v2.5-pro",
+   "chars": 11,
+   "latency_s": 11.2,
+   "events": 14,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "xiaomi/mimo-v2.5-pro"
+  },
+  {
+   "id": "minimax-m3",
+   "chars": 11,
+   "latency_s": 7.0,
+   "events": 9,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "minimax/minimax-m3"
+  },
+  {
+   "id": "qwen3.7-max",
+   "chars": 10,
+   "latency_s": 6.8,
+   "events": 12,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "evidence": "RETRY_OK_1 exact",
+   "conol_api_id": "qwen/qwen3.7-max"
+  },
+  {
+   "id": "qwen3.7-plus",
+   "chars": 10,
+   "latency_s": 8.5,
+   "events": 11,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "qwen/qwen3.7-plus"
+  },
+  {
+   "id": "step-3.7-flash",
+   "chars": 11,
+   "latency_s": 8.8,
+   "events": 8,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true,
+   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "conol_api_id": "stepfun/step-3.7-flash"
+  }
+ ],
+ "rejected": [
+  {
+   "id": "mimo-v2.5",
+   "reason": "status=stopped with zero assistant text",
+   "latency_s": 154.2,
+   "events": 5,
+   "final_status": "stopped",
+   "conol_api_id": "mimo-v2.5"
+  }
+ ],
+ "downgraded_premium_ids": [
+  "claude-opus-4-7",
+  "claude-opus-4-8",
+  "claude-opus-5",
+  "claude-sonnet-4-6",
+  "claude-fable-5",
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gemini-3.5-flash",
+  "gemini-3.1-pro-preview",
+  "kimi-k3",
+  "fusion"
+ ],
+ "downgraded_effective_model": "claude-haiku-4-5",
+ "channel_865_should_advertise": [
+  "claude-haiku-4-5",
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+  "gemini-3.1-flash-lite",
+  "glm-5.1",
+  "glm-5.2",
+  "gpt-5.6-luna",
+  "grok-4.3",
+  "hy3",
+  "kimi-k2.7-code",
+  "mimo-v2.5-pro",
+  "minimax-m3",
+  "qwen3.7-max",
+  "qwen3.7-plus",
+  "step-3.7-flash"
+ ],
+ "http_429_during_audit": 0,
+ "note": "Downgraded models also ignore the XML tool protocol, so tool use and incremental streaming cannot be evaluated on them.",
+ "id_forms": "`id` = flat picker form advertised by /v1/models and CHANNEL_MODELS; `conol_api_id` = raw upstream spelling conol.ai requires. _resolve_model() accepts either."
+}

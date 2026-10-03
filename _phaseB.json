@@ -1,0 +1,141 @@
+{
+ "probed_at": "2026-10-03T11:44:00Z",
+ "honest": [
+  {
+   "id": "gpt-5.6-luna",
+   "chars": 10,
+   "latency_s": 3.9,
+   "events": 4,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "claude-haiku-4-5",
+   "chars": 10,
+   "latency_s": 19.2,
+   "events": 26,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "deepseek/deepseek-v4-pro",
+   "chars": 10,
+   "latency_s": 6.3,
+   "events": 4,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "z-ai/glm-5.2",
+   "chars": 10,
+   "latency_s": 7.5,
+   "events": 9,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "z-ai/glm-5.1",
+   "chars": 10,
+   "latency_s": 6.6,
+   "events": 5,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "moonshotai/kimi-k2.7-code",
+   "chars": 11,
+   "latency_s": 12.6,
+   "events": 13,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "qwen/qwen3.7-plus",
+   "chars": 10,
+   "latency_s": 8.5,
+   "events": 11,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "google/gemini-3.1-flash-lite",
+   "chars": 10,
+   "latency_s": 3.2,
+   "events": 3,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "x-ai/grok-4.3",
+   "chars": 11,
+   "latency_s": 5.3,
+   "events": 5,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "minimax/minimax-m3",
+   "chars": 11,
+   "latency_s": 7.0,
+   "events": 9,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "tencent/hy3",
+   "chars": 11,
+   "latency_s": 7.9,
+   "events": 5,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "stepfun/step-3.7-flash",
+   "chars": 11,
+   "latency_s": 8.8,
+   "events": 8,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  },
+  {
+   "id": "xiaomi/mimo-v2.5-pro",
+   "chars": 11,
+   "latency_s": 11.2,
+   "events": 14,
+   "downgraded": null,
+   "effective": null,
+   "final_status": "stopped",
+   "exact": true
+  }
+ ],
+ "downgraded": [],
+ "failed": [
+  "('deepseek/deepseek-v4-flash', 'TimeoutError', None)",
+  "('qwen/qwen3.7-max', 'TimeoutError', None)",
+  "('xiaomi/mimo-v2.5', 'TimeoutError', None)"
+ ]
+}

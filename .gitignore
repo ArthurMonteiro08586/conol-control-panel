@@ -1,0 +1,26 @@
+# credentials and runtime data — never version these
+cookies_*.json
+*.jsonl
+*.jsonl.bak-*
+*_state.json
+*.log
+*.pid
+*.tmp
+config.json
+captcha_keys.json
+conol_keystore.db*
+email_queue.jsonl
+chrome_cdp_profile*/
+
+# build artifacts, locks, reports and data — code only in this repo
+__pycache__/
+*.pyc
+*.lock
+*.bak
+conol_audit_live.json
+conol_scale_summary.json
+*_audit*.json
+*_summary.json
+working_proxies.txt
+conol_tunnels.json
+!config.example.json
