@@ -232,11 +232,14 @@ async def api_pool_reload():
 
 @app.post("/api/gateway/start")
 async def api_gateway_start():
-    """Start gateway.py in background."""
+    """Start conol_gateway.py (the maintained stdlib gateway, v4) in background."""
+    env = dict(os.environ)
+    env.setdefault("ENI_POOL_KEY", CFG.get("gateway", {}).get("api_key", "test"))
     try:
         subprocess.Popen(
-            ["python", "-u", "gateway.py"],
+            [sys.executable, "-X", "utf8", "-u", "conol_gateway.py"],
             cwd=str(ROOT),
+            env=env,
             stdout=open(ROOT / "gateway.log", "a"),
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,

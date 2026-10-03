@@ -16,7 +16,7 @@ call chrome_cdp.bat
 timeout /t 3 /nobreak >nul
 
 echo  [2/4] Запускаю Gateway (порт 9999)...
-start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u gateway.py"
+start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u conol_gateway.py"
 timeout /t 2 /nobreak >nul
 
 echo  [3/4] Запускаю Dashboard (порт 9988)...

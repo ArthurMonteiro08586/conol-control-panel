@@ -1,4 +1,4 @@
-# ENI :: Conol Control Panel v7.0
+# ENI :: Conol Control Panel v7.1
 
 Автоматическая регистрация аккаунтов conol.ai + OpenAI-совместимый API-шлюз + веб-дашборд.
 
@@ -12,73 +12,87 @@ start_all.bat  ← Меню управления (регистрация, кве
 После запуска:
 - **Dashboard:** http://127.0.0.1:9988
 - **API:** http://127.0.0.1:9999/v1
-- **API ключ:** `test`
+- **API ключ:** из `config.json` → `gateway.api_key`
+
+## Что нового в v7.1
+
+- **Фри-капча (Chrome CDP)** — reCAPTCHA v3 токены минтятся в локальном Chrome
+  с тёплым профилем (~0.5s/токен, $0). Платный AntiCaptcha остался фолбэком.
+  Порядок провайдеров: `config.json` → `captcha.providers`.
+- **Второй почтовый провайдер: t-online.de** — выделенные ящики из дампа
+  (17k+ адресов, IMAP `secureimap.t-online.de`). Занятые на conol адреса
+  автоматически скипаются (hop до 12 на аккаунт). Gmail plus-alias остался.
+- **Фикс стриминга** — tool-use в `stream=true` больше не течёт сырым
+  `<function_call>` XML в content-дельты.
+- **Меню/дашборд** — выбор провайдера и фри-капчи прямо из UI и start_all.bat.
 
 ## Компоненты
 
 | Файл | Что делает |
 |------|-----------|
-| `start.bat` | One-click запуск всего (Gateway + Dashboard + браузер) |
-| `start_all.bat` | Меню управления (12 опций) |
-| `gateway.py` | OpenAI-совместимый API-шлюз (порт 9999) |
+| `conol_gateway.py` | OpenAI-совместимый шлюз v4 (stdlib, порт 9999): 15 моделей, stream + tool-use (XML-эмуляция), ротация пула, rate-limit backoff |
+| `conol_register.py` | Авторег: капча-цепочка, email-провайдеры, hop через занятые адреса, квест-кредиты |
+| `conol_captcha.py` | Решатель reCAPTCHA v3: chrome_cdp (free) → anticaptcha (paid) |
+| `conol_emails.py` | Провайдеры почты: gmail (+alias) / t-online.de (выделенные ящики), IMAP-поллер verify-ссылок |
+| `conol_refresh.py` | Авто-refresh сессионных токенов пула |
+| `conol_scale.py` | Супервизор масштабирования пула |
 | `dashboard_server.py` | Веб-дашборд (порт 9988) |
-| `eni_conol.py` | CLI: регистрация, квесты, статус, тест |
-| `multi_reg.py` | Массовая регистрация из email-очереди |
-| `config.json` | Конфигурация (gmail, порты, пароли) |
+| `conol_infer.py` | Низкоуровневый клиент conol.ai API (sessions/SSE) |
+| `config.example.json` | Шаблон конфига (скопируйте в `config.json` и заполните) |
+
+## Регистрация
+
+```bash
+# авто-провайдер (gmail), капча-цепочка cdp→anticaptcha
+python -X utf8 conol_register.py --count 5
+
+# только t-online.de ящики
+python -X utf8 conol_register.py --count 5 --provider tonline
+
+# только фри-капча (без платного AntiCaptcha вообще)
+python -X utf8 conol_register.py --count 5 --free-captcha
+
+# всё вместе: бесплатный конвейер
+python -X utf8 conol_register.py --count 10 --provider tonline --free-captcha
+```
+
+Замеры (2026-10-03): t-online + фри-капча, полный цикл (register → verify-email →
+sign-in → balance) = **19s, 600 кредитов, $0 расходов**; 5 solves через тёплый Chrome.
+
+## Конфигурация (config.json)
+
+| Секция | Ключи |
+|--------|-------|
+| `conol` | `base_url`, `password`, `site_key` |
+| `gmail` | `address`, `app_password` |
+| `captcha` | `providers` (порядок цепочки), `anticaptcha_keys`, `cdp_port` (9228) |
+| `emails.tonline` | `enabled`, `creds_file` (формат `email:password` построчно), `state_file`, `imap_host` |
+| `gateway` | `port` (9999), `api_key`, `host` |
+
+Секреты читаются через `conol_secrets.py` (config.json → env `CONOL_*`).
+`config.json` в git не попадает; для деплоя используйте `config.example.json`.
 
 ## Dashboard — что видно
 
 - **Статус Gateway** в реальном времени (online/offline, активных акков, запросов)
 - **Таблица аккаунтов** — email, имя, статус cookies, credits, дата регистрации
-- **Email очередь** — добавление/удаление, статусы
-- **Модели** — 18 моделей conol.ai (gpt-5.6-luna, deepseek-v4-pro, claude-opus-4-8, ...)
-- **Логи** — gateway, reg, multi_reg, quests — в реальном времени
-- **Кнопки управления** — старт Gateway, регистрация, квесты, reload пула
+- **Управление регом** — кол-во, провайдер почты (auto/gmail/t-online), чекбокс фри-капчи
+- **Email очередь**, **Модели**, **API Test** (tool-use в один клик), **Логи**
 
-## CLI команды
-
-```bash
-# Статус
-python eni_conol.py status
-
-# Регистрация
-python eni_conol.py reg 5          # 5 новых аккаунтов
-python multi_reg.py 3 2            # 3 acc/email, 2 потока из очереди
-
-# Квесты
-python eni_conol.py quests         # фарм на всех аккаунтах
-
-# Проверка
-python eni_conol.py test           # проверить все акки
-```
-
-## Подключение к OMP / Hermes
-
-```yaml
-custom_providers:
-  - name: conol
-    provider: openai
-    base_url: http://127.0.0.1:9999/v1
-    api_key: test
-    models:
-      gpt-5.6-luna: {ctx: 200000, cost: {input: 0, output: 0}}
-      deepseek/deepseek-v4-pro: {ctx: 200000, cost: {input: 0, output: 0}}
-      claude-opus-4-8: {ctx: 200000, cost: {input: 0, output: 0}}
-      gemini-3-pro: {ctx: 200000, cost: {input: 0, output: 0}}
-```
-
-## API endpoints
+## API endpoints (шлюз)
 
 | Method | Path | Описание |
 |--------|------|----------|
-| GET | `/health` | Статус шлюза |
+| GET | `/health` | Статус шлюза + пул |
 | GET | `/v1/models` | Список моделей |
-| POST | `/v1/chat/completions` | Chat (stream + non-stream + tools) |
-| GET | `/queue` | Email очередь |
-| POST | `/queue/add` | Добавить email |
-| POST | `/queue/remove` | Удалить email |
-| POST | `/pool/reload` | Перезагрузить пул |
-| GET | `/pool/stats` | Статистика пула |
+| POST | `/v1/chat/completions` | Chat: stream + non-stream + tools (OpenAI tool_choice семантика) |
+| GET | `/pool/stats` | Счётчики по аккаунтам |
+| POST | `/pool/reload` | Перечитать пул (подхватывает новые реги) |
+
+Tool-use: запрос с `tools` → шлюз инжектит XML-протокол в системный блок,
+парсит `<function_call>` из ответа модели и возвращает нативные
+`tool_calls` + `finish_reason: "tool_calls"`. Системный промпт запроса
+сохраняется (XML-протокол дописывается к нему, не заменяет).
 
 ## Порты
 

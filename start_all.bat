@@ -57,7 +57,7 @@ echo  [+] Запускаю Chrome CDP (порт 9228)...
 call chrome_cdp.bat
 timeout /t 2 /nobreak >nul
 echo  [+] Запускаю Gateway (порт 9999)...
-start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u gateway.py"
+start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u conol_gateway.py"
 timeout /t 2 /nobreak >nul
 echo  [+] Запускаю Dashboard (порт 9988)...
 start "ENI Dashboard" /min cmd /c "python -u dashboard_server.py"
@@ -96,13 +96,13 @@ echo.
 set /p fc_count="  [2/5] Сколько аккаунтов регать? (default 3): "
 if "%fc_count%"=="" set fc_count=3
 echo  [2/5] Регистрирую %fc_count% аккаунтов...
-python -u eni_conol.py reg %fc_count%
+python -X utf8 -u conol_register.py --count %fc_count%
 echo.
 echo  [3/5] Фарм квестов...
 python -u eni_conol.py quests
 echo.
 echo  [4/5] Запускаю Gateway...
-start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u gateway.py"
+start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u conol_gateway.py"
 timeout /t 2 /nobreak >nul
 echo  [5/5] Запускаю Dashboard...
 start "ENI Dashboard" /min cmd /c "python -u dashboard_server.py"
@@ -123,7 +123,7 @@ goto menu
 echo.
 echo  [+] Запускаю Gateway...
 set ENI_POOL_KEY=test
-python -u gateway.py
+python -u conol_gateway.py
 pause
 goto menu
 
@@ -138,8 +138,15 @@ goto menu
 echo.
 set /p regcount="Сколько аккаунтов注册ить? (default 5): "
 if "%regcount%"=="" set regcount=5
-echo  [+] Регистрирую %regcount% аккаунтов...
-python -u eni_conol.py reg %regcount%
+set /p regprov="Email провайдер? [1] auto [2] gmail [3] t-online (default auto): "
+set PROVARG=
+if "%regprov%"=="2" set PROVARG=--provider gmail
+if "%regprov%"=="3" set PROVARG=--provider tonline
+set /p regfree="Только фри-капча (Chrome CDP, без AntiCaptcha)? [y/N]: "
+set FREEARG=
+if /i "%regfree%"=="y" set FREEARG=--free-captcha
+echo  [+] Регистрирую %regcount% аккаунтов %PROVARG% %FREEARG%...
+python -X utf8 -u conol_register.py --count %regcount% %PROVARG% %FREEARG%
 echo.
 pause
 goto menu
