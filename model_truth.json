@@ -1,6 +1,6 @@
 {
  "probed_at": "2026-10-03T11:34:26Z",
- "manifest_written_at": "2026-10-03T12:42:00Z",
+ "manifest_written_at": "2026-10-03T19:47:00Z",
  "method": {
   "phase_a": "POST /api/sessions only (no inference, no credits) to read modelDowngraded/effectiveModel",
   "phase_b": "one deterministic inference per id requiring an exact token back",
@@ -204,18 +204,6 @@
    "exact": true,
    "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
    "conol_api_id": "qwen/qwen3.7-plus"
-  },
-  {
-   "id": "step-3.7-flash",
-   "chars": 11,
-   "latency_s": 8.8,
-   "events": 8,
-   "downgraded": null,
-   "effective": null,
-   "final_status": "stopped",
-   "exact": true,
-   "evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
-   "conol_api_id": "stepfun/step-3.7-flash"
   }
  ],
  "rejected": [
@@ -226,6 +214,14 @@
    "events": 5,
    "final_status": "stopped",
    "conol_api_id": "mimo-v2.5"
+  },
+  {
+   "id": "step-3.7-flash",
+   "excluded_at": "2026-10-03",
+   "reason": "accepts the session, reports status=stopped, emits no assistant text on two prompt shapes (plain \"2+2?\" and \"Reply with exactly: SMOKE_OK\"). 4 zones × 3 different accounts, 100% EMPTY. Previously passed phase B in 8.8 s with exact token — model-side regression.",
+   "conol_api_id": "stepfun/step-3.7-flash",
+   "previous_evidence": "exact-token answer, chars>0, no downgrade flags, status=stopped",
+   "previous_latency_s": 8.8
   }
  ],
  "downgraded_premium_ids": [
@@ -258,8 +254,7 @@
   "mimo-v2.5-pro",
   "minimax-m3",
   "qwen3.7-max",
-  "qwen3.7-plus",
-  "step-3.7-flash"
+  "qwen3.7-plus"
  ],
  "http_429_during_audit": 0,
  "note": "Downgraded models also ignore the XML tool protocol, so tool use and incremental streaming cannot be evaluated on them.",

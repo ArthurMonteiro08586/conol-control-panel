@@ -94,9 +94,10 @@ CONOL_MODEL_MAP = {
     "grok-4.3": "x-ai/grok-4.3",
     "minimax-m3": "minimax/minimax-m3",
     "hy3": "tencent/hy3",
-    "step-3.7-flash": "stepfun/step-3.7-flash",
-    # "mimo-v2.5" excluded: probed live 2026-10-03, session reaches status=stopped with
-    # zero assistant text (154 s, 5 events, empty answer). Not downgraded, just silent.
+    # "step-3.7-flash" excluded 2026-10-03: accepts the session, reports status=stopped,
+    # emits no assistant text on two prompt shapes (plain "2+2?" and "Reply with exactly:
+    # SMOKE_OK"). 4 zones × 3 different accounts, 100% EMPTY. Previously passed phase B
+    # in 8.8 s with exact token — this is a model-side regression, not a misspelled id.
     "mimo-v2.5-pro": "xiaomi/mimo-v2.5-pro",
 }
 
@@ -106,14 +107,29 @@ MODELS = [m.strip() for m in (os.environ.get("ENI_CONOL_MODELS") or "").split(",
     or DEFAULT_MODELS
 
 
-def _resolve_model(model_id: str) -> str:
-    """Translate flattened picker id to conol API model id.  Passes through raw ids."""
+def _resolve_model(model_id: str):
+    """Translate a flattened picker id to the raw conol API id; accept the raw id too.
+
+    Returns None for anything CONOL_MODEL_MAP does not advertise. Forwarding unknown ids is
+    how two defects survived: conol accepts ANY model string and silently downgrades the ones
+    it does not honour, so a direct `gpt-5.5` request came back HTTP 200 served by
+    claude-haiku-4-5; and a model removed from the map (step-3.7-flash, dead upstream
+    2026-10-03) kept being forwarded — 49 s per attempt, after which new-api retried it
+    (RETRY_TIMES=4) and the client hung past 90 s instead of getting an instant refusal.
+    """
     if model_id in CONOL_MODEL_MAP:
         return CONOL_MODEL_MAP[model_id]
-    # Accept raw conol ids too
     if model_id in CONOL_MODEL_MAP.values():
         return model_id
-    return model_id
+    return None
+
+
+def _model_not_found(model_id: str) -> dict:
+    """OpenAI-shaped refusal for an id this gateway does not advertise."""
+    return {"_status": 503,
+            "error": {"message": "The model `%s` does not exist or you do not have access "
+                                 "to it." % model_id,
+                      "type": "invalid_request_error", "code": "model_not_found"}}
 
 # An account is retired after this many consecutive HARD failures, and hard means credential
 # death only (401 / 403 / "Not authenticated"). Rate limits and create errors are deliberately
@@ -499,8 +515,12 @@ def answer_request(model: str, messages: list, tools: list = None,
     if not prompt.strip():
         return {"_status": 400, "error": {"message": "no usable message content",
                                           "type": "invalid_request_error"}}
+    if _resolve_model(model) is None:
+        return _model_not_found(model)
     excluded: list[str] = []
     last = "no usable account in the pool"
+    deadline = time.monotonic() + BUDGET
+    min_budget = 5
     for _ in range(max(1, tries)):
         acc = POOL.next(exclude=tuple(excluded))
         if acc is None:
@@ -511,9 +531,14 @@ def answer_request(model: str, messages: list, tools: list = None,
             POOL.report_hard_fail(acc["name"])
             last = "account %s has no credential" % acc["name"]
             continue
+        remaining = deadline - time.monotonic()
+        if remaining < min_budget:
+            last = "remaining budget too small to try another account"
+            break
         conol_model = _resolve_model(model)
         try:
-            res = run_inference(cookie, model=conol_model, prompt=prompt, budget=BUDGET, effort=EFFORT)
+            res = run_inference(cookie, model=conol_model, prompt=prompt,
+                                budget=max(min_budget, remaining), effort=EFFORT)
         except ConolError as e:
             res = {"verdict": "ERROR", "detail": str(e), "answer": "", "seconds": 0.0}
         except Exception as e:
@@ -550,6 +575,14 @@ def answer_request(model: str, messages: list, tools: list = None,
         # An empty answer is usually the model name, not the account: rotate without
         # retiring it. Only credential death retires an account.
         detail = str(res.get("detail") or "")
+        if detail.startswith("budget_exhausted_active"):
+            # Model-wide condition, not account-specific: all accounts hit the same wall
+            # (3 zones × 3 different accounts, 100% EMPTY, status=active events=1).
+            # Rotating only compounds latency — return 502 immediately.
+            POOL.stats["empty"] += 1
+            return {"_status": 502,
+                    "error": {"message": "conol pool could not answer: budget exhausted on active session",
+                              "type": "upstream_error"}}
         if verdict == "ERROR" and ("401" in detail or "403" in detail
                                    or "Not authenticated" in detail):
             POOL.report_hard_fail(acc["name"])
@@ -566,9 +599,11 @@ def answer_request(model: str, messages: list, tools: list = None,
             POOL.stats["errors"] += 1
         else:
             POOL.stats["empty"] += 1
-        last = "%s on %s: %s" % (verdict, acc["name"], detail[:160])
+        raw = "%s on %s: %s" % (verdict, acc["name"], detail[:160])
+        print("[pool] %s" % raw, file=sys.stderr)
+        last = raw
     return {"_status": 502,
-            "error": {"message": "conol pool could not answer: %s" % last,
+            "error": {"message": "conol pool could not answer: %s" % _clean_error(last),
                       "type": "upstream_error"}}
 
 
@@ -577,8 +612,11 @@ def _clean_error(msg: str) -> str:
     msg = msg.replace("account ", "an account ")
     # Genericise any name-looking fragments
     import re
-    msg = re.sub(r"\b(Conol|A\d+)\b", "account", msg)
-    return msg.split(":")[0].strip() if ":" in msg else msg.strip()
+    msg = re.sub(r"\b(?:Conol\d*|A\d+)\b", "account", msg)
+    msg = msg.strip()
+    if len(msg) > 200:
+        msg = msg[:200].rstrip() + "..."
+    return msg
 
 
 def _strip_final(text: str) -> str:
@@ -630,10 +668,16 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
                                          "type": "invalid_request_error"}})
         q.put(None)
         return
+    if _resolve_model(model) is None:
+        q.put(_model_not_found(model))
+        q.put(None)
+        return
 
     excluded: list[str] = []
     last_err = "pool has no usable accounts"
     any_session = False
+    deadline = time.monotonic() + BUDGET
+    min_budget = 5
 
     for _ in range(max(1, tries)):
         acc = POOL.next(exclude=tuple(excluded))
@@ -645,6 +689,10 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
             POOL.report_hard_fail(acc["name"])
             last_err = "an account has no credential"
             continue
+
+        remaining = deadline - time.monotonic()
+        if remaining < min_budget:
+            break
 
         conol_model = _resolve_model(model)
         try:
@@ -699,7 +747,7 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
                         role_emitted = True
                     q.put({"content": delta})
 
-        got = read_answer(cookie, sid, budget=BUDGET, on_event=on_event)
+        got = read_answer(cookie, sid, budget=max(min_budget, deadline - time.monotonic()), on_event=on_event)
         final_answer = got.get("answer", "").strip()
 
         if final_answer:
@@ -730,6 +778,18 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
 
         detail = str(got.get("detail") or "")
         status = got.get("status") or ""
+        if detail.startswith("budget_exhausted_active"):
+            # Model-wide: all accounts would produce the same result.
+            # Return 502 immediately without rotating through the pool.
+            POOL.stats["empty"] += 1
+            if role_emitted:
+                q.put({"finish": "stop"})
+            else:
+                q.put({"_status": 502,
+                       "error": {"message": "conol pool could not answer: budget exhausted on active session",
+                                 "type": "upstream_error"}})
+            q.put(None)
+            return
         if "401" in detail or "403" in detail or "Not authenticated" in detail or "401" in status:
             POOL.report_hard_fail(acc["name"])
             POOL.stats["errors"] += 1
@@ -765,7 +825,7 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ConolPoolGateway/4"
+    server_version = "ConolPoolGateway/5"
     protocol_version = "HTTP/1.1"
 
     def _send(self, code: int, payload, ctype: str = "application/json",
@@ -1045,6 +1105,10 @@ def selfcheck() -> int:
         if kind == "empty":
             return {"verdict": "EMPTY", "detail": "no assistant text, status=stopped",
                     "answer": "", "seconds": 0.1, "session_id": "s"}
+        if kind == "budget_exhausted":
+            return {"verdict": "EMPTY",
+                    "detail": "budget_exhausted_active: model ran out of budget before producing text",
+                    "answer": "", "seconds": 20.0, "session_id": "s"}
         if kind == "tool":
             return {"verdict": "ANSWERED",
                     "answer": '<function_call>\n{"name":"get_weather","arguments":{"city":"Tokyo"}}\n</function_call>',
@@ -1111,7 +1175,7 @@ def selfcheck() -> int:
         # retired after FAIL_LIMIT hard failures.
         before = pool.snapshot()["requests"]
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "messages": [{"role": "user", "content": "ping"}]})
+                        {"model": "glm-5.2", "messages": [{"role": "user", "content": "ping"}]})
         doc = json.loads(body)
         check("chat returns 200 after failing over", st == 200, body[:120])
         check("OpenAI response shape", doc.get("object") == "chat.completion"
@@ -1121,10 +1185,11 @@ def selfcheck() -> int:
               doc.get("usage"))
         check("the failing account was tried first", calls and calls[0]["cookie"] == "tok1",
               calls[:1])
-        check("model id is passed through verbatim", calls[-1]["model"] == "gpt-5.5", calls[-1])
+        check("a flat id reaches conol as its raw id",
+              calls[-1]["model"] == CONOL_MODEL_MAP["glm-5.2"], calls[-1])
         check("request counters advanced", pool.snapshot()["requests"] > before)
 
-        st, body = call("POST", "/v1/chat/completions", {"model": "gpt-5.5", "messages": []})
+        st, body = call("POST", "/v1/chat/completions", {"model": "glm-5.2", "messages": []})
         check("empty messages -> 400", st == 400, body[:100])
 
         st, body = call("GET", "/pool/stats")
@@ -1143,7 +1208,7 @@ def selfcheck() -> int:
         calls_before = len(calls)
         mode["tok1"] = mode["tok2"] = "429"
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "messages": [{"role": "user", "content": "ping"}]})
+                        {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "ping"}]})
         check("429 upstream -> 429 to the client, not 502", st == 429, "%s %s" % (st, body[:100]))
         check("429 body names the rate limit", "rate limited" in body, body[:120])
         check("429 retires nobody", pool.snapshot()["usable"] == usable_before,
@@ -1155,7 +1220,7 @@ def selfcheck() -> int:
         mode["tok1"] = mode["tok2"] = "401"
         for _ in range(FAIL_LIMIT):
             call("POST", "/v1/chat/completions",
-                 {"model": "gpt-5.5", "messages": [{"role": "user", "content": "ping"}]})
+                 {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "ping"}]})
         check("401 repeated FAIL_LIMIT times retires the account",
               pool.snapshot()["usable"] < usable_before, pool.snapshot())
         mode["tok1"] = mode["tok2"] = "ok"
@@ -1164,6 +1229,18 @@ def selfcheck() -> int:
             a["dead"] = False
         check("fixture restored for the remaining checks",
               pool.snapshot()["usable"] == usable_before, pool.snapshot())
+
+        # Model-wide budget-exhausted returns 502 WITHOUT rotating to another account.
+        calls_before = len(calls)
+        mode["tok1"] = "budget_exhausted"
+        mode["tok2"] = "ok"
+        st, body = call("POST", "/v1/chat/completions",
+                        {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "ping"}]})
+        check("budget_exhausted_active -> 502, not 200 or 429", st == 502, "%s %s" % (st, body[:100]))
+        check("budget_exhausted_active does not rotate to another account",
+              len(calls) - calls_before == 1,
+              "%d calls, expected 1" % (len(calls) - calls_before))
+        mode["tok1"] = mode["tok2"] = "ok"
 
         # ── Streaming granularity test (needs create_session/read_answer mocks) ──
         real_cs = create_session
@@ -1191,7 +1268,7 @@ def selfcheck() -> int:
         globals()["read_answer"] = fake_ra_incremental
 
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "stream": True,
+                        {"model": "gpt-5.6-luna", "stream": True,
                          "messages": [{"role": "user", "content": "ping"}]})
         check("stream responds as SSE with [DONE]",
               st == 200 and body.startswith("data: ") and body.rstrip().endswith("data: [DONE]"),
@@ -1230,7 +1307,7 @@ def selfcheck() -> int:
 
         globals()["read_answer"] = fake_ra_toolcall
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "stream": True,
+                        {"model": "gpt-5.6-luna", "stream": True,
                          "tools": [{"type": "function", "function":
                                     {"name": "get_weather", "description": "",
                                      "parameters": {"type": "object",
@@ -1255,7 +1332,7 @@ def selfcheck() -> int:
         # ── Non-streaming tool use test ──
         mode["tok1"] = mode["tok2"] = "tool"
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5",
+                        {"model": "gpt-5.6-luna",
                          "tools": [{"type": "function", "function":
                                     {"name": "get_weather", "description": "",
                                      "parameters": {"type": "object",
@@ -1275,7 +1352,7 @@ def selfcheck() -> int:
         # ── role: tool message accepted ──
         mode["tok1"] = mode["tok2"] = "ok"
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5",
+                        {"model": "gpt-5.6-luna",
                          "messages": [{"role": "system", "content": "You are helpful"},
                                       {"role": "user", "content": "summarize"},
                                       {"role": "assistant",
@@ -1294,7 +1371,7 @@ def selfcheck() -> int:
         # Defer to the fake_inference which returns "PONG" — no tool call XML,
         # so the response must be a plain text finish_reason: stop.
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5",
+                        {"model": "gpt-5.6-luna",
                          "tools": [{"type": "function", "function":
                                     {"name": "read", "description": "",
                                      "parameters": {"type": "object",
@@ -1312,7 +1389,7 @@ def selfcheck() -> int:
         mode["tok1"] = mode["tok2"] = "tool_malformed"
         # Make fake_inference return broken XML
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5",
+                        {"model": "gpt-5.6-luna",
                          "tools": [{"type": "function", "function":
                                     {"name": "read", "description": "",
                                      "parameters": {"type": "object",
@@ -1329,9 +1406,9 @@ def selfcheck() -> int:
         mode["tok1"] = mode["tok2"] = "ok"
 
         # ── <final> wrapper stripped from non-streaming answer ──
-        mode["tok1"] = "final_wrapper"
+        mode["tok1"] = mode["tok2"] = "final_wrapper"
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5",
+                        {"model": "gpt-5.6-luna",
                          "tools": [{"type": "function", "function":
                                     {"name": "read", "description": "",
                                      "parameters": {"type": "object",
@@ -1345,7 +1422,7 @@ def selfcheck() -> int:
               st == 200 and "<final>" not in content and "</final>" not in content
               and "helped" in content,
               content[:120])
-        mode["tok1"] = "ok"
+        mode["tok1"] = mode["tok2"] = "ok"
 
         # ── Distinctive tool result token appears in final content ──
         # Set up a fake read_answer that processes a tool result and returns
@@ -1373,7 +1450,7 @@ def selfcheck() -> int:
         globals()["create_session"] = fake_cs_direct
         globals()["read_answer"] = fake_ra_toolresult
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "stream": True,
+                        {"model": "gpt-5.6-luna", "stream": True,
                          "messages": [
                              {"role": "user", "content": "what is weather?"},
                              {"role": "assistant", "tool_calls": [
@@ -1410,7 +1487,7 @@ def selfcheck() -> int:
             raise ConolError("create HTTP 500 all accounts exhausted")
         globals()["create_session"] = failing_cs
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "stream": True,
+                        {"model": "gpt-5.6-luna", "stream": True,
                          "messages": [{"role": "user", "content": "ping"}]})
         doc = json.loads(body) if body.startswith("{") else {}
         check("streaming exhausted pool -> 502, not 200",
@@ -1428,7 +1505,7 @@ def selfcheck() -> int:
             raise ConolError("create HTTP 429 Too Many Requests")
         globals()["create_session"] = failing_cs_429
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "stream": True,
+                        {"model": "gpt-5.6-luna", "stream": True,
                          "messages": [{"role": "user", "content": "ping"}]})
         doc = json.loads(body) if body.startswith("{") else {}
         check("streaming 429 returns 429 with rate-limit body, not 502",
@@ -1457,7 +1534,7 @@ def selfcheck() -> int:
         globals()["create_session"] = fake_cs_split
         globals()["read_answer"] = fake_ra_split
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "stream": True,
+                        {"model": "gpt-5.6-luna", "stream": True,
                          "messages": [{"role": "user", "content": "split"}]})
         # Check no <final> or </final> in any SSE frame
         sse_lines = [ln for ln in body.split("\n") if ln.startswith("data: ") and ln != "data: [DONE]"]
@@ -1495,7 +1572,7 @@ def selfcheck() -> int:
         globals()["create_session"] = fake_cs_empty_ok
         globals()["read_answer"] = fake_ra_empty
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "stream": True,
+                        {"model": "gpt-5.6-luna", "stream": True,
                          "messages": [{"role": "user", "content": "ping"}]})
         doc = json.loads(body) if body.startswith("{") else {}
         check("session OK but empty answer -> 502 in streaming",
@@ -1507,12 +1584,27 @@ def selfcheck() -> int:
         # Same for non-streaming path
         mode["tok1"] = mode["tok2"] = "empty"
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "messages": [{"role": "user", "content": "ping"}]})
+                        {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "ping"}]})
         doc = json.loads(body) if body.startswith("{") else {}
         check("empty answer in non-streaming -> 502",
               st == 502 and ("error" in body or "could not answer" in body),
               "%s %s" % (st, body[:150]))
         mode["tok1"] = mode["tok2"] = "ok"
+
+        # ── Streaming: budget_exhausted_active returns 502 immediately ──
+        def fake_ra_budget_exhausted(cookie, sid, budget=180, on_event=None):
+            return {"answer": "", "status": "active", "events": 1, "seconds": 20.0,
+                    "detail": "budget_exhausted_active: model ran out of budget",
+                    "session_id": sid}
+        globals()["create_session"] = fake_cs_empty_ok
+        globals()["read_answer"] = fake_ra_budget_exhausted
+        st, body = call("POST", "/v1/chat/completions",
+                        {"model": "gpt-5.6-luna", "stream": True,
+                         "messages": [{"role": "user", "content": "ping"}]})
+        check("streaming budget_exhausted_active -> 502, not 200",
+              st == 502 and ("error" in body or "could not answer" in body),
+              "%s %s" % (st, body[:150]))
+
         globals()["create_session"] = real_cs6
         globals()["read_answer"] = real_ra6
 
@@ -1538,13 +1630,13 @@ def selfcheck() -> int:
         # Non-streaming
         mode["tok1"] = mode["tok2"] = "eq"
         st_ns, body_ns = call("POST", "/v1/chat/completions",
-                               {"model": "gpt-5.5",
+                               {"model": "gpt-5.6-luna",
                                 "messages": [{"role": "user", "content": "letters"}]})
         ns_doc = json.loads(body_ns)
         ns_text = (ns_doc.get("choices") or [{}])[0].get("message", {}).get("content", "")
         # Streaming
         st_s, body_s = call("POST", "/v1/chat/completions",
-                             {"model": "gpt-5.5", "stream": True,
+                             {"model": "gpt-5.6-luna", "stream": True,
                               "messages": [{"role": "user", "content": "letters"}]})
         sse_parts = []
         for ln in body_s.split("\n"):
@@ -1568,7 +1660,7 @@ def selfcheck() -> int:
             pool.report_hard_fail("A1")
             pool.report_hard_fail("A2")
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "messages": [{"role": "user", "content": "ping"}]})
+                        {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "ping"}]})
         check("exhausted pool -> 502 with a reason", st == 502 and "could not answer" in body,
               "%s %s" % (st, body[:120]))
 
@@ -1579,9 +1671,80 @@ def selfcheck() -> int:
         check("no secret configured -> 503, not an open gateway", st == 503,
               "%s %s" % (st, body[:90]))
         st, body = call("POST", "/v1/chat/completions",
-                        {"model": "gpt-5.5", "messages": [{"role": "user", "content": "ping"}]})
+                        {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "ping"}]})
         check("no secret configured -> chat refused too", st == 503, st)
         os.environ[_KEY_ENV] = test_secret
+
+        # ── _clean_error must strip Conol<digits> account names ──
+        dirty = "EMPTY on Conol985573: no assistant text, status=active events=1"
+        clean = _clean_error(dirty)
+        check("_clean_error strips Conol985573 from error messages",
+              "Conol985573" not in clean and "Conol" not in clean,
+              "cleaned to: %s" % clean)
+        check("_clean_error preserves the reason after stripping account name",
+              "no assistant text" in clean,
+              "cleaned to: %s" % clean)
+
+        # ── Non-streaming 502 body must not contain account names ──
+        mode["tok1"] = mode["tok2"] = "empty"
+        st, body = call("POST", "/v1/chat/completions",
+                        {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "ping"}]})
+        check("non-streaming empty-answer 502 body contains no account names",
+              st == 502 and "Conol" not in body and "A1" not in body and "A2" not in body,
+              body[:200])
+        mode["tok1"] = mode["tok2"] = "ok"
+
+        # ── server_version trailet ──
+        check("server_version ends with /5",
+              Handler.server_version.endswith("/5"),
+              Handler.server_version)
+
+        # ── step-3.7-flash excluded from model map ──
+        check("step-3.7-flash excluded from CONOL_MODEL_MAP",
+              "step-3.7-flash" not in CONOL_MODEL_MAP,
+              list(CONOL_MODEL_MAP.keys()))
+
+        # ── unadvertised ids fail closed instead of being forwarded to conol ──
+        check("resolve keeps a flat advertised id",
+              _resolve_model("gpt-5.6-luna") == "gpt-5.6-luna")
+        check("resolve translates a flat id to the raw conol id",
+              _resolve_model("glm-5.2") == CONOL_MODEL_MAP["glm-5.2"],
+              CONOL_MODEL_MAP.get("glm-5.2"))
+        check("resolve accepts the raw conol id form",
+              _resolve_model(CONOL_MODEL_MAP["glm-5.2"]) == CONOL_MODEL_MAP["glm-5.2"])
+        check("resolve refuses a downgraded id", _resolve_model("gpt-5.5") is None)
+        check("resolve refuses a removed id", _resolve_model("step-3.7-flash") is None)
+        check("resolve refuses an invented id", _resolve_model("totally-made-up") is None)
+        _mnf = _model_not_found("gpt-5.5")
+        check("model_not_found is a 503 carrying an OpenAI error code",
+              _mnf["_status"] == 503 and _mnf["error"]["code"] == "model_not_found", _mnf)
+        _refusal = answer_request("gpt-5.5", [{"role": "user", "content": "hi"}])
+        check("answer_request refuses an unadvertised id before touching the pool",
+              _refusal.get("_status") == 503
+              and _refusal["error"]["code"] == "model_not_found", str(_refusal)[:120])
+        _sq = queue.Queue()
+        _stream_completion("step-3.7-flash", [{"role": "user", "content": "hi"}],
+                           None, None, 1, _sq)
+        _first = _sq.get_nowait()
+        check("the stream path refuses an unadvertised id before opening a session",
+              _first.get("_status") == 503
+              and _first["error"]["code"] == "model_not_found", str(_first)[:120])
+        check("the stream refusal is terminated by a sentinel", _sq.get_nowait() is None)
+
+        # ── step-3.7-flash excluded from model_truth manifest ──
+        import json as _json
+        _mtp = Path(__file__).resolve().parent / "model_truth.json"
+        if _mtp.exists():
+            _mt = _json.loads(_mtp.read_text(encoding="utf-8"))
+            _honest_ids = [m["id"] for m in _mt.get("honest", [])]
+            _channel_ids = list(_mt.get("channel_865_should_advertise", []))
+            _rejected_ids = [m["id"] for m in _mt.get("rejected", [])]
+            check("step-3.7-flash not in model_truth honest",
+                  "step-3.7-flash" not in _honest_ids, _honest_ids)
+            check("step-3.7-flash not in model_truth channel_865_should_advertise",
+                  "step-3.7-flash" not in _channel_ids, _channel_ids)
+            check("step-3.7-flash in model_truth rejected",
+                  "step-3.7-flash" in _rejected_ids, _rejected_ids)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -1625,7 +1788,7 @@ def main() -> int:
               % snap["pool_file"], file=sys.stderr)
         return 2
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
-    print("ENI Conol Pool Gateway v4 | %s:%d | accounts loaded=%d usable=%d | models=%d"
+    print("ENI Conol Pool Gateway v5 | %s:%d | accounts loaded=%d usable=%d | models=%d"
           % (args.host, args.port, snap["loaded"], snap["usable"], len(MODELS)), flush=True)
     try:
         httpd.serve_forever()

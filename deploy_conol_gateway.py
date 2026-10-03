@@ -56,14 +56,16 @@ CHANNEL_NAME = "conol-farm-pool"
 # {"modelDowngraded": true, "effectiveModel": "claude-haiku-4-5"}, while these ids returned
 # only {"sessionId": ...} — conol emits those fields solely on downgrade, so their absence
 # is a clean verdict, not missing data.
-# Excluded mimo-v2.5 (status=stopped, zero assistant text). Excluded the 14 premium ids
-# (claude-opus/sonnet/fable, gpt-5.5, gpt-5.5-pro, gpt-5.6-sol/terra, gemini-3.5-flash,
-# gemini-3.1-pro-preview, kimi-k3, fusion): conol silently serves them as claude-haiku-4-5,
-# so advertising them would misrepresent the channel. Flattened ids, matching the gateway's
-# DEFAULT_MODELS; _resolve_model() also accepts the raw prefixed form.
+# Excluded mimo-v2.5 (status=stopped, zero assistant text). Excluded step-3.7-flash
+# 2026-10-03 (stopped, zero text, 4 zones × 3 accounts, model-side regression).
+# Excluded the 14 premium ids (claude-opus/sonnet/fable, gpt-5.5, gpt-5.5-pro, gpt-5.6-sol/
+# terra, gemini-3.5-flash, gemini-3.1-pro-preview, kimi-k3, fusion): conol silently serves
+# them as claude-haiku-4-5, so advertising them would misrepresent the channel. Flattened
+# ids, matching the gateway's DEFAULT_MODELS; _resolve_model() also accepts the raw
+# prefixed form.
 CHANNEL_MODELS = ["gpt-5.6-luna", "claude-haiku-4-5", "deepseek-v4-pro", "deepseek-v4-flash",
                   "glm-5.2", "glm-5.1", "kimi-k2.7-code", "qwen3.7-plus", "qwen3.7-max",
-                  "gemini-3.1-flash-lite", "grok-4.3", "minimax-m3", "hy3", "step-3.7-flash",
+                  "gemini-3.1-flash-lite", "grok-4.3", "minimax-m3", "hy3",
                   "mimo-v2.5-pro"]
 
 # Pool rows carry `password`, `email`, `cookies_path` and `api_key_masked` — none of which
@@ -300,19 +302,30 @@ PYEOF""" % (REMOTE_ENV, PORT)
     if smoke:
         rc, so, se = sh(gw, REMOTE_SMOKE, timeout=240)
         print("  smoke: %s" % (so.strip() or se.strip()[:300]))
-        if "SMOKE_OK" not in so:
+        if "SMOKE_OK" not in so or "STREAM_OK" not in so:
             return 1
     return 0
 
 
 # Runs on the VPS: reads the key from its own env file, so the secret never leaves the host.
+# The script tests both non-streaming and streaming inference. Both legs MUST name an id that
+# CONOL_MODEL_MAP actually advertises: an unadvertised id is not rejected, conol silently
+# downgrades it (gpt-5.5 -> claude-haiku-4-5) and haiku answers the exact-token prompt just as
+# well, so the old "gpt-5.5" smoke passed while exercising a downgraded path that also BUFFERS
+# the stream — which is why the streaming leg saw frames=1 and failed on a healthy build.
 REMOTE_SMOKE = r'''python3 - <<'PYEOF'
 import json, urllib.request, urllib.error
 from pathlib import Path
 key = [l.split("=", 1)[1] for l in Path("/opt/conol-pool/env").read_text().splitlines()
        if l.startswith("ENI_POOL_" + "KEY=")][0]
-body = json.dumps({"model": "gpt-5.5",
-                   "messages": [{"role": "user", "content": "Reply with exactly: SMOKE_OK"}]}).encode()
+
+# ── Non-streaming leg ──
+# The prompt is deliberately ~50 chars, not "SMOKE_OK": an 8-char answer arrives as ONE content
+# frame even on a healthy build (observed twice, 2026-10-03), so frames>=2 would fail a good
+# deploy. A ~30-char answer measured 6 frames and a ~300-char answer 23 frames, so the threshold
+# is meaningful only once the answer is long enough to be chunked.
+body = json.dumps({"model": "gpt-5.6-luna",
+                   "messages": [{"role": "user", "content": "Reply with exactly this text and nothing else: SMOKE_OK streaming leg 1 2 3 4 5 6 7 8 9 10"}]}).encode()
 req = urllib.request.Request("http://127.0.0.1:9999/v1/chat/completions", data=body,
                             headers={"Content-Type": "application/json",
                                      "Authorization": "Bear" + "er " + key}, method="POST")
@@ -324,8 +337,55 @@ try:
           % (r.status, len(txt), d.get("usage", {}).get("total_tokens"), txt[:60]))
 except urllib.error.HTTPError as e:
     print("SMOKE_FAIL http=%s %s" % (e.code, e.read()[:200]))
+    raise SystemExit(1)
 except Exception as e:
     print("SMOKE_FAIL %s %s" % (type(e).__name__, str(e)[:120]))
+    raise SystemExit(1)
+
+# ── Streaming leg ──
+body_s = json.dumps({"model": "gpt-5.6-luna", "stream": True,
+                     "messages": [{"role": "user", "content": "Reply with exactly this text and nothing else: SMOKE_OK streaming leg 1 2 3 4 5 6 7 8 9 10"}]}).encode()
+req_s = urllib.request.Request("http://127.0.0.1:9999/v1/chat/completions", data=body_s,
+                              headers={"Content-Type": "application/json",
+                                       "Authorization": "Bear" + "er " + key}, method="POST")
+try:
+    with urllib.request.urlopen(req_s, timeout=180) as r:
+        raw = r.read().decode()
+    import re
+    frames = []
+    for ln in raw.split("\n"):
+        if ln.startswith("data: ") and ln != "data: [DONE]":
+            try:
+                ch = json.loads(ln[6:])
+                d = ch.get("choices", [{}])[0].get("delta", {})
+                if "content" in d:
+                    frames.append(d["content"])
+            except (ValueError, KeyError):
+                pass
+    streamed = "".join(frames)
+    faults = []
+    if len(frames) < 2:
+        faults.append("frames=%d < 2" % len(frames))
+    if not streamed:
+        faults.append("empty streamed text")
+    elif streamed != txt:
+        faults.append("stream != ns (%d vs %d)" % (len(streamed), len(txt)))
+    if "conol pool could not answer" in raw:
+        faults.append("error-leak")
+    if "<final>" in raw or "</final>" in raw or "<function_call>" in raw:
+        faults.append("tag-leak")
+    if re.search(r"Conol\d+", raw):
+        faults.append("account-leak")
+    if faults:
+        print("STREAM_FAIL %s" % ";".join(faults))
+        raise SystemExit(1)
+    print("STREAM_OK frames=%d len=%d" % (len(frames), len(streamed)))
+except urllib.error.HTTPError as e:
+    print("STREAM_FAIL http=%s %s" % (e.code, e.read()[:200]))
+    raise SystemExit(1)
+except Exception as e:
+    print("STREAM_FAIL %s %s" % (type(e).__name__, str(e)[:120]))
+    raise SystemExit(1)
 PYEOF'''
 
 # Runs on the VPS: refreshes the admin token with the host's own refresher, then creates or
@@ -344,7 +404,7 @@ NEWAPI_DB = %DB%
 key = [l.split("=", 1)[1] for l in Path("/opt/conol-pool/env").read_text().splitlines()
        if l.startswith("ENI_POOL_" + "KEY=")][0]
 
-subprocess.run([%REFRESHER_PY%, %REFRESHER%], timeout=120, capture_output=True)
+_ref = subprocess.run([%REFRESHER_PY%, %REFRESHER%], timeout=120, capture_output=True, text=True)
 tok = Path("/opt/grok-gateway/admin_token.txt").read_text().strip().splitlines()[0]
 
 
@@ -361,6 +421,19 @@ def call(path, method="GET", payload=None):
         return e.code, {"raw": e.read().decode("utf-8", "replace")[:300]}
     except Exception as e:
         return None, {"err": "%s: %s" % (type(e).__name__, str(e)[:100])}
+
+# Fail fast on an unusable admin token. The refresher's exit code used to be dropped and the
+# stale token file read anyway, so a login refused by new-api (429 = the 100-per-24h session
+# issuance window is full; observed 2026-10-03 17:18:12Z) surfaced much later as a pair of
+# incomprehensible 401s on the read and the write. Probe first, name the cause, stop.
+_probe_st, _probe_body = call("/api/channel/?p=0&size=1")
+if _probe_st is None or _probe_st in (401, 403):
+    _ref_out = (_ref.stdout or "") + (_ref.stderr or "")
+    _why = (" — new-api refused the login (session issuance window full), retry after it rolls"
+            if "429" in _ref_out else "")
+    print("RESULT admin_token_unusable refresher_rc=%s probe_http=%s%s"
+          % (_ref.returncode, _probe_st, _why))
+    raise SystemExit(1)
 
 
 # Existence is decided by a read-only SELECT, not by the paginated REST list: this DB holds
@@ -703,6 +776,32 @@ def selfcheck() -> int:
     check("channel script is idempotent (update when the name exists)",
           "existing" in REMOTE_CHANNEL and "PUT" in REMOTE_CHANNEL)
     check("channel script tests the channel after writing", "/api/channel/test/" in REMOTE_CHANNEL)
+    # A refused login used to be invisible: the refresher's exit code was dropped, the stale
+    # token file was read anyway, and the failure surfaced as two bare 401s on read and write.
+    check("channel script keeps the refresher result", "_ref.returncode" in REMOTE_CHANNEL)
+    check("channel script probes the admin token before writing",
+          "/api/channel/?p=0&size=1" in REMOTE_CHANNEL)
+    check("channel script fails fast on an unusable admin token",
+          "admin_token_unusable" in REMOTE_CHANNEL)
+    check("channel script names the issuance window as the cause of a refused login",
+          "issuance window full" in REMOTE_CHANNEL)
+
+    check("step-3.7-flash excluded from CHANNEL_MODELS",
+          "step-3.7-flash" not in CHANNEL_MODELS and "step-3.7-flash" not in str(CHANNEL_MODELS),
+          CHANNEL_MODELS)
+
+    # Both smoke legs must name an advertised id. An unadvertised one is not rejected: conol
+    # silently downgrades it to claude-haiku-4-5, haiku answers the exact-token prompt just as
+    # well, and the downgraded path BUFFERS the stream — observed 2026-10-03 as frames=1 on a
+    # healthy build while both legs still said "gpt-5.5".
+    check("smoke non-stream leg names the advertised test model",
+          '"model": "%s"' % CHANNEL_MODELS[0] in REMOTE_SMOKE, CHANNEL_MODELS[0])
+    check("smoke stream leg names the advertised test model",
+          '"model": "%s", "stream": True' % CHANNEL_MODELS[0] in REMOTE_SMOKE, CHANNEL_MODELS[0])
+    check("smoke does not test a downgraded id", "gpt-5.5" not in REMOTE_SMOKE)
+    check("smoke stream leg demands incremental frames", "frames=%d < 2" in REMOTE_SMOKE)
+    check("smoke stream leg compares against the non-stream answer", "stream != ns" in REMOTE_SMOKE)
+    check("smoke stream leg scans for account-name leaks", "Conol\\d+" in REMOTE_SMOKE)
 
     print()
     print("FAILURES: " + str(fails) if fails else "all blocks passed")
