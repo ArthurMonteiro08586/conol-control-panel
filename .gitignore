@@ -11,6 +11,7 @@ captcha_keys.json
 conol_keystore.db*
 email_queue.jsonl
 chrome_cdp_profile*/
+.chrome_cdp_profile/
 
 # build artifacts, locks, reports and data — code only in this repo
 __pycache__/

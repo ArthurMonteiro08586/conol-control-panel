@@ -235,6 +235,23 @@ If no tool is needed, wrap only the answer text so it can stream safely:
 Never mix <final> with <function_call>. Never output text outside these wrappers."""
 
 _CLOSERS = ("</function_call>", "</function_function_call>")
+_TOOL_OPEN = "<function_call>"
+
+
+def _hold_at_tool_marker(text: str) -> str:
+    """Truncate streamed text at the first '<function_call>' (or a trailing
+    partial prefix of it) so raw tool XML never leaks into content deltas.
+
+    The withheld tail is re-derived from the parsed final answer: content after
+    the tool blocks (clean_text) is emitted at finish, with `emitted` counting
+    only the characters actually sent, so nothing is duplicated or lost."""
+    idx = text.find(_TOOL_OPEN)
+    if idx >= 0:
+        return text[:idx]
+    for n in range(min(len(text), len(_TOOL_OPEN) - 1), 0, -1):
+        if text.endswith(_TOOL_OPEN[:n]):
+            return text[:-n]
+    return text
 
 
 def _filter_tools_for_choice(tools: list, tool_choice=None) -> list:
@@ -665,6 +682,12 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
             _apply_event(state, ev)
             cur_raw = state.get("answer") or ""
             cur_stripped = _strip_final(cur_raw)
+            if tools:
+                # Never stream raw <function_call> XML as content; withhold from
+                # the marker on. Whatever follows the tool blocks (clean_text) is
+                # emitted at finish from the parsed answer — `emitted` counts only
+                # characters actually sent, so nothing duplicates or drops.
+                cur_stripped = _hold_at_tool_marker(cur_stripped)
             if len(cur_stripped) > emitted:
                 delta = cur_stripped[emitted:]
                 emitted = len(cur_stripped)
@@ -683,7 +706,13 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
             POOL.report_ok(acc["name"])
             POOL.stats["answered"] += 1
             tool_calls, clean_text = _parse_tool_calls(final_answer) if tools else ([], final_answer)
-            displayed = clean_text if (tools and clean_text) else final_answer
+            if tools and tool_calls:
+                # Content lives in tool_calls; clean_text is whatever prose the model
+                # wrapped outside the blocks (may be ""). Never fall back to the raw
+                # final_answer here — it still contains the <function_call> XML.
+                displayed = clean_text
+            else:
+                displayed = final_answer
             displayed = _strip_final(displayed)
             if not role_emitted and displayed:
                 if model_override:

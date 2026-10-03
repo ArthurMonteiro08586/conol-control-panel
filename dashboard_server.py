@@ -5,7 +5,7 @@ Web UI для управления пулом аккаунтов conol.ai
 Порт: 9988
 """
 
-import asyncio, json, os, time, subprocess, threading
+import asyncio, json, os, sys, time, subprocess, threading
 from pathlib import Path
 from typing import Optional
 
@@ -286,18 +286,31 @@ async def api_quests_run():
 
 @app.post("/api/reg/single")
 async def api_reg_single(request: Request):
-    """Run eni_conol.py reg N in background."""
+    """Run conol_register.py (the maintained registrar) in background.
+
+    body: {count, provider: gmail|tonline|null, free_captcha: bool}
+    free_captcha=true forces the Chrome CDP solver (no paid AntiCaptcha spend)."""
     body = await request.json()
     count = int(body.get("count", 3))
+    provider = body.get("provider") or None
+    free_captcha = bool(body.get("free_captcha", False))
+
+    cmd = [sys.executable, "-X", "utf8", "-u", "conol_register.py", "--count", str(count)]
+    if provider in ("gmail", "tonline"):
+        cmd += ["--provider", provider]
+    if free_captcha:
+        cmd += ["--free-captcha"]
     try:
         subprocess.Popen(
-            ["python", "-u", "eni_conol.py", "reg", str(count)],
+            cmd,
             cwd=str(ROOT),
             stdout=open(ROOT / "reg.log", "a"),
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
-        return JSONResponse({"ok": True, "message": f"Registering {count} accounts"})
+        label = provider or "auto"
+        cap = "free Chrome CDP" if free_captcha else "chain (cdp→anticaptcha)"
+        return JSONResponse({"ok": True, "message": f"Registering {count} accounts (email={label}, captcha={cap})"})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
@@ -502,6 +515,14 @@ tr:hover{background:#15151f}
       <div class="row">
         <input class="input" id="reg-count" type="number" value="5" min="1" max="50" style="max-width:100px;">
         <span style="color:#888;font-size:13px;">кол-во акков для регистрации</span>
+        <select class="input" id="reg-provider" style="max-width:160px;">
+          <option value="">Email: auto</option>
+          <option value="gmail">Email: gmail (+alias)</option>
+          <option value="tonline">Email: t-online.de</option>
+        </select>
+        <label style="color:#888;font-size:13px;display:flex;align-items:center;gap:6px;">
+          <input type="checkbox" id="reg-free-captcha"> фри-капча (Chrome CDP, без AntiCaptcha)
+        </label>
         <button class="btn btn-red btn-sm" onclick="regSingleConfirm()">Регистрировать</button>
       </div>
     </div>
@@ -725,8 +746,10 @@ async function poolReload(){
 }
 async function regSingle(){
   const n=parseInt(document.getElementById('reg-count').value)||5;
-  const r=await api('/api/reg/single','POST',{count:n});
-  alert(r.ok?`Регистрация ${n} акков запущена`:'Error: '+r.error);
+  const provider=document.getElementById('reg-provider').value||null;
+  const freeCaptcha=document.getElementById('reg-free-captcha').checked;
+  const r=await api('/api/reg/single','POST',{count:n,provider:provider,free_captcha:freeCaptcha});
+  alert(r.ok?r.message:'Error: '+r.error);
 }
 function regSingleConfirm(){regSingle();}
 async function regMulti(){

@@ -51,45 +51,14 @@ PID_FILE = BASE_DIR / "conol_register_run.pid"
 from conol_secrets import (  # noqa: E402
     GMAIL, GMAIL_APP, PASSWORD, SITE_KEY, BASE_URL, ANTICAPTCHA_KEYS,
 )
+import conol_captcha  # noqa: E402  free chrome_cdp -> paid anticaptcha chain
+import conol_emails   # noqa: E402  gmail plus-alias + t-online.de dedicated boxes
 
 
 def solve_captcha(action: str) -> Optional[str]:
-    """Solve reCAPTCHA v3 via AntiCaptcha. Returns token or None."""
-    import requests
-
-    for key in ANTICAPTCHA_KEYS:
-        try:
-            resp = requests.post("https://api.anti-captcha.com/createTask", json={
-                "clientKey": key,
-                "task": {
-                    "type": "RecaptchaV3TaskProxyless",
-                    "websiteURL": BASE_URL,
-                    "websiteKey": SITE_KEY,
-                    "pageAction": action,
-                    "minScore": 0.3,
-                }
-            }, timeout=30)
-            data = resp.json()
-            if data.get("errorId") != 0:
-                log.warning("createTask fail (%s...): %s", key[:8], data.get("errorDescription", "?"))
-                continue
-            task_id = data["taskId"]
-            deadline = time.time() + 90
-            while time.time() < deadline:
-                r = requests.post("https://api.anti-captcha.com/getTaskResult", json={
-                    "clientKey": key, "taskId": task_id
-                }, timeout=15).json()
-                if r.get("status") == "ready":
-                    token = r["solution"].get("gRecaptchaResponse", "")
-                    if token:
-                        return token
-                elif r.get("errorId", 0) != 0:
-                    log.warning("getTaskResult error: %s", r.get("errorDescription", "?"))
-                    break
-                time.sleep(3)
-        except Exception as e:
-            log.warning("AntiCaptcha exception (%s...): %s", key[:8], e)
-    return None
+    """Solve reCAPTCHA v3 through the provider chain (free Chrome CDP first,
+    paid AntiCaptcha fallback). See conol_captcha.py for the order/config."""
+    return conol_captcha.solve(action)
 
 
 def new_client() -> "requests.Session":
@@ -172,7 +141,12 @@ def register_account(email: str, name: str, captcha_token: str, client=None) -> 
     _log_failure(f"register {email[:34]}", resp)
     try:
         err = resp.json()
-        return {"error": err.get("error") or err.get("code") or resp.text[:200]}
+        # Include the machine code so callers can classify a CAPTCHA_VERIFICATION_FAILED
+        # rejection (retryable with a fresh token) from a hard validation error. The
+        # human message alone ("Human verification failed") does not contain "CAPTCHA".
+        msg = err.get("error") or resp.text[:200]
+        code = err.get("code") or ""
+        return {"error": f"{msg} [{code}]" if code else msg}
     except ValueError:
         return {"error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
 
@@ -312,16 +286,25 @@ def append_to_pool(entry: dict):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def register_one(suffix: int) -> dict:
-    """Register one account. Returns result dict."""
-    email = f"baradok609+conol{suffix}@gmail.com"
+def register_one(suffix: int, provider: str = None) -> dict:
+    """Register one account. Returns result dict.
+
+    provider: 'gmail' | 'tonline' | None (first enabled). The address AND its
+    mailbox credentials come from conol_emails.next_address() so the verify-link
+    poller knows which IMAP server/box to read."""
+    mailres = conol_emails.next_address(f"conol{suffix}", provider=provider)
+    if mailres is None:
+        return {"name": f"Conol{suffix}", "email": None, "started_at": time.time(),
+                "error": f"no email address available (provider={provider})"}
+    email = mailres["address"]
     # 10 digits, not 6: save_cookies keys the file on this name, so a 6-digit space
     # is only 10^6 and a ~370-attempt campaign has a ~6-7% birthday chance of two
     # pool rows pointing at one cookies_conol*.json (the second silently overwrites
     # the first, and it surfaces later as a token belonging to another account).
     name = f"Conol{str(suffix).zfill(10)[-10:]}"
     started = time.time()
-    result = {"name": name, "email": email, "started_at": started}
+    result = {"name": name, "email": email, "started_at": started,
+              "email_provider": mailres["provider"]}
     captcha_cost = 0
 
     log.info("=" * 50)
@@ -331,10 +314,15 @@ def register_one(suffix: int) -> dict:
 
     # Step 1: register. Retry with a FRESH token per attempt: AntiCaptcha v3
     # tokens are a score lottery, and the same endpoint reliably passes on
-    # attempt 2-3. Evidence: sign-in succeeds 32/42 ONLY because it retries,
-    # while the single-shot steps failed with 403 CAPTCHA_VERIFICATION_FAILED.
+    # attempt 2-3. On EMAIL_ALREADY_REGISTERED (a t-online box used by an earlier
+    # campaign) we hop to a fresh address instead of burning attempts — the pool
+    # of 17k .de boxes has an unknown fraction already taken.
     reg = None
-    for attempt in range(1, 4):
+    email_hops = 0
+    MAX_EMAIL_HOPS = 12
+    attempt = 0
+    while attempt < 3:
+        attempt += 1
         captcha = solve_captcha("sign_up")
         if not captcha:
             log.warning("sign_up captcha solve failed (attempt %d/3)", attempt)
@@ -346,12 +334,34 @@ def register_one(suffix: int) -> dict:
             reg = candidate
             break
         err_text = str((candidate or {}).get("error", ""))
+        upper = err_text.upper()
+        if "ALREADY REGISTERED" in upper or "ALREADY EXISTS" in upper or "EMAIL_ALREADY" in upper:
+            # This mailbox is taken on conol. Mark it used and hop to the next one.
+            email_hops += 1
+            if email_hops > MAX_EMAIL_HOPS:
+                log.error("%d consecutive already-registered addresses — provider pool exhausted", email_hops)
+                return {**result, "captcha_solves": captcha_cost,
+                        "error": "all reserved addresses already registered (%d hops)" % email_hops}
+            log.warning("address %s already registered on conol — reserving next (hop %d/%d)",
+                        email, email_hops, MAX_EMAIL_HOPS)
+            conol_emails.mark_used(mailres)
+            mailres = conol_emails.next_address("conol%d" % int(time.time() * 1000), provider=mailres["provider"])
+            if mailres is None:
+                return {**result, "captcha_solves": captcha_cost,
+                        "error": "email provider exhausted while skipping registered addresses"}
+            email = mailres["address"]
+            result["email"] = email
+            result["email_provider"] = mailres["provider"]
+            name = "Conol" + str(int(time.time() * 1000) % 10_000_000_000).zfill(10)[-10:]
+            attempt -= 1  # a hop is not a failed attempt against the new address
+            client = new_client()
+            continue
         log.warning("register attempt %d/3 rejected: %s", attempt, err_text[:160] or "no response")
-        if err_text and "CAPTCHA" not in err_text.upper():
+        if err_text and "CAPTCHA" not in upper:
             # Registration is not idempotent. A 403 CAPTCHA_VERIFICATION_FAILED happens
-            # BEFORE the account exists, so retrying is safe; a 400/409/422 ("email
-            # already exists", validation) or a 429 does not benefit from another
-            # solve and retrying it just burns budget while masking real state.
+            # BEFORE the account exists, so retrying is safe; a 400/409/422 (validation)
+            # or a 429 does not benefit from another solve and retrying it just burns
+            # budget while masking real state.
             log.error("non-captcha rejection — not retrying: %s", err_text[:160])
             return {**result, "captcha_solves": captcha_cost, "error": err_text[:200]}
         time.sleep(5)
@@ -381,11 +391,12 @@ def register_one(suffix: int) -> dict:
 
     log.info("✅ Verification email sent")
 
-    # Step 3: Wait for verify link in Gmail (up to 3 min)
-    verify_url = wait_for_verify_link(email, started, 180)
+    # Step 3: Wait for verify link in the provider mailbox (up to 3 min)
+    verify_url = conol_emails.wait_for_verify_link(mailres, started, 180)
     if not verify_url:
         return {**result, "captcha_solves": captcha_cost,
-                "error": "no verify email found in Gmail (3 min timeout)"}
+                "error": "no verify email found in %s mailbox (3 min timeout)"
+                         % mailres["provider"]}
 
     log.info("✅ Got verify link: %s...", verify_url[:80])
 
@@ -443,6 +454,8 @@ def register_one(suffix: int) -> dict:
             "session_token": None, "token_expires": None,
             "last_login": time.time(), "status": "unverified",
             "credits": 0,
+            "email_provider": mailres["provider"],
+            "mailbox_password": mailres.get("password"),
         })
         log.warning("%s: session ok but emailVerified=false — queued as 'unverified'", name)
         return {**result, "captcha_solves": captcha_cost,
@@ -460,6 +473,8 @@ def register_one(suffix: int) -> dict:
         "session_token": session_token, "token_expires": time.time() + 604800,
         "last_login": time.time(), "status": "live",
         "credits": credits or 0,
+        "email_provider": mailres["provider"],
+        "mailbox_password": mailres.get("password"),
     }
     append_to_pool(pool_entry)
 
@@ -607,7 +622,22 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Pilot conol.ai registration")
     parser.add_argument("--count", type=int, default=5, help="Number of accounts to register")
+    parser.add_argument("--provider", choices=["gmail", "tonline"], default=None,
+                        help="Email provider (default: first enabled — gmail, then tonline)")
+    parser.add_argument("--free-captcha", action="store_true",
+                        help="Force the free Chrome CDP solver only (no paid AntiCaptcha)")
     args = parser.parse_args()
+
+    if args.free_captcha:
+        conol_captcha.PROVIDERS = ["chrome_cdp"]
+    # Pre-launch Chrome + park it on conol.ai so the first solve is ~1 s, not ~30.
+    if "chrome_cdp" in conol_captcha.PROVIDERS:
+        conol_captcha.warmup()
+    enabled = conol_emails.providers()
+    if args.provider and args.provider not in enabled:
+        log.error("provider %s not enabled (available: %s)", args.provider, enabled)
+        return 4
+    log.info("email providers enabled: %s (requested: %s)", enabled, args.provider or "auto")
 
     # Claim the slot before anything touches the pool. atexit (not try/finally around
     # the whole body) keeps the diff to two lines and still covers every clean exit
@@ -623,15 +653,16 @@ def main():
         args.count = 200
 
     log.info("Pilot registration: %d accounts", args.count)
-    budgets = solver_balances()
-    log.info("Captcha budget (live getBalance): %s", budgets)
+    paid_in_chain = "anticaptcha" in conol_captcha.PROVIDERS
+    budgets = solver_balances() if paid_in_chain else {}
+    log.info("Captcha budget (live getBalance): %s", budgets or "n/a — free solver chain")
     spendable = sum(v for v in budgets.values() if isinstance(v, (int, float)))
     # Scale the pre-flight floor with the round size: at the measured ~$0.03/attempt
     # (worst case ~$0.09 with every retry firing) a flat $1 floor lets a 200-attempt
     # round start, create aliases, and die on the consecutive-failure breaker — which
     # is exactly the wasted work the floor exists to prevent.
-    floor = max(MIN_BUDGET_USD, 0.09 * args.count)
-    if spendable < floor:
+    floor = max(MIN_BUDGET_USD, 0.09 * args.count) if paid_in_chain else 0.0
+    if paid_in_chain and spendable < floor:
         log.error("Solver budget $%.4f is below the $%.2f floor for %d attempts — refusing to start",
                   spendable, floor, args.count)
         return 2
@@ -645,7 +676,7 @@ def main():
         # land in the same millisecond, which the 30 s inter-account gap rules out.
         # `name` above keeps 10 digits so the cookie filename space matches.
         suffix = int(time.time() * 1000) % 10_000_000_000
-        result = register_one(suffix)
+        result = register_one(suffix, provider=args.provider)
         result["batch_index"] = i
         results.append(result)
         append_result_line(result)

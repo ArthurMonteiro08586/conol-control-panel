@@ -41,8 +41,23 @@
   },
   "captcha": {
     "anticaptcha_keys": [
-      "REPLACE_ME_KEY_1",
-      "REPLACE_ME_KEY_2"
-    ]
+      "YOUR_ANTICAPTCHA_KEY"
+    ],
+    "providers": [
+      "chrome_cdp",
+      "anticaptcha"
+    ],
+    "cdp_port": 9228
+  },
+  "emails": {
+    "gmail": {
+      "enabled": true
+    },
+    "tonline": {
+      "enabled": true,
+      "creds_file": "/path/to/working_mails.txt",
+      "state_file": "tonline_state.json",
+      "imap_host": "secureimap.t-online.de"
+    }
   }
 }
