@@ -682,14 +682,21 @@ def answer_request(model: str, messages: list, tools: list = None,
                                    or "Not authenticated" in detail):
             POOL.report_hard_fail(acc["name"])
             POOL.stats["errors"] += 1
-        elif verdict == "ERROR" and "429" in detail:
-            # IP-wide, not per account: rotating would only add load, and retiring would
-            # drain the pool. Surface 429 + Retry-After instead — a 502 here is exactly
-            # what makes new-api auto-disable the entire channel for a shared rate limit.
+        elif verdict == "ERROR" and ("429" in detail):
+            # IP-wide, not per account: rotating only adds load.
             POOL.stats["rate_limited"] = POOL.stats.get("rate_limited", 0) + 1
             return {"_status": 429, "_retry_after": RATE_LIMIT_BACKOFF_SEC,
                     "error": {"message": "conol rate limited the pool: %s" % detail[:160],
                               "type": "rate_limit_error"}}
+        elif verdict == "ERROR" and ("must be at most" in detail):
+            # Payload too large — conol.ai caps ~120k chars. Client error, not pool
+            # failure: rotating accounts would waste all of them and risk a rate-limit
+            # ban. Return 413 (invalid_request_error) so OMP trims, not a 502 that
+            # would make new-api auto-disable the channel.
+            POOL.stats["too_long"] = POOL.stats.get("too_long", 0) + 1
+            return {"_status": 413,
+                    "error": {"message": "conol message too long: %s" % detail[:160],
+                              "type": "invalid_request_error"}}
         elif verdict == "ERROR":
             POOL.stats["errors"] += 1
         else:
@@ -893,12 +900,19 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
         elif "429" in detail:
             POOL.stats["rate_limited"] = POOL.stats.get("rate_limited", 0) + 1
             if role_emitted:
-                # 200 already committed, cannot unsend — terminate stream
                 q.put({"finish": "stop"})
             else:
                 q.put({"_status": 429, "_retry_after": RATE_LIMIT_BACKOFF_SEC,
                        "error": {"message": "conol rate limited the pool",
                                  "type": "rate_limit_error"}})
+            q.put(None)
+            return
+        elif "must be at most" in detail:
+            POOL.stats["too_long"] = POOL.stats.get("too_long", 0) + 1
+            if not role_emitted:
+                q.put({"_status": 413,
+                       "error": {"message": "conol message too long: %s" % _clean_error(detail)[:160],
+                                 "type": "invalid_request_error"}})
             q.put(None)
             return
         else:
