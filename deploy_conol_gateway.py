@@ -45,7 +45,8 @@ UNIT_PATH = "/etc/systemd/system/conol-pool.service"
 SERVICE = "conol-pool"
 PORT = 9999
 NEWAPI_BASE = "http://127.0.0.1:48000"
-ADMIN_TOKEN_FILE = "/opt/grok-gateway/admin_token.txt"
+ADMIN_TOKEN_FILE = "/root/.secrets/newapi_admin_token"
+ADMIN_TOKEN_FILE_LEGACY = "/opt/grok-gateway/admin_token.txt"
 ADMIN_TOKEN_REFRESHER = "/opt/grok-gateway/admin_token_refresh.py"
 ADMIN_TOKEN_PYTHON = "/opt/venv/bin/python"
 CHANNEL_NAME = "conol-farm-pool"
@@ -405,7 +406,8 @@ key = [l.split("=", 1)[1] for l in Path("/opt/conol-pool/env").read_text().split
        if l.startswith("ENI_POOL_" + "KEY=")][0]
 
 _ref = subprocess.run([%REFRESHER_PY%, %REFRESHER%], timeout=120, capture_output=True, text=True)
-tok = Path("/opt/grok-gateway/admin_token.txt").read_text().strip().splitlines()[0]
+_tok_paths = ["/root/.secrets/newapi_admin_token", "/opt/grok-gateway/admin_token.txt"]
+tok = next(Path(p).read_text().strip().splitlines()[0] for p in _tok_paths if Path(p).exists())
 
 
 def call(path, method="GET", payload=None):
