@@ -55,6 +55,9 @@ start_all.bat  ← Меню управления (регистрация, кве
 | `conol_refresh.py` | Авто-refresh сессионных токенов пула |
 | `conol_scale.py` | Супервизор масштабирования пула |
 | `dashboard_server.py` | Веб-дашборд (порт 9988) |
+| `conol_quest_farm.py` | Resumable квест-фармер всего пула (4 easy-квеста × 300cr на акк) |
+| `deploy_conol_gateway.py` | Деплой шлюза на VPS: systemd, smoke-тест, синк пула, канал new-api |
+| `start_all.bat` | Меню управления v7.2: quick start, рег, фарм, VPS (deploy/sync/health), full cycle |
 | `conol_infer.py` | Низкоуровневый клиент conol.ai API (sessions/SSE) |
 | `config.example.json` | Шаблон конфига (скопируйте в `config.json` и заполните) |
 
@@ -123,7 +126,8 @@ python -X utf8 conol_quest_farm.py   # все live-акки, 4 easy-квеста
 - Акки с уже готовыми квестами скипаются мгновенно (1 GET /api/quests).
 - Квест = agent-сессия (gpt-5.6-luna, effort low) + poll `/api/quests` до
   `completed: true`. Проверено на новом сайте 2026-10-04: +300cr/квест.
-- Прогон 2026-10-05: 61,500cr за первые ~1.5ч (71/271 акков).
+- Прогон 2026-10-05: 83,700cr за ~2.2ч (92/271 акков, идёт дальше —
+  resumable, state переживает убийство процесса).
 
 ## Деплой на VPS (фарм-сервер)
 
