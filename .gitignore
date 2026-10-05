@@ -8,6 +8,7 @@ cookies_*.json
 *.tmp
 config.json
 captcha_keys.json
+conol_quest_farm_state.json
 conol_keystore.db*
 email_queue.jsonl
 chrome_cdp_profile*/

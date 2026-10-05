@@ -112,6 +112,38 @@ Tool-use: запрос с `tools` → шлюз инжектит XML-проток
 `tool_calls` + `finish_reason: "tool_calls"`. Системный промпт запроса
 сохраняется (XML-протокол дописывается к нему, не заменяет).
 
+## Квест-фарм
+
+```bash
+python -X utf8 conol_quest_farm.py   # все live-акки, 4 easy-квеста x 300cr
+```
+
+- Resumable: прогресс в `conol_quest_farm_state.json` (gitignored), можно
+  убить и перезапустить — продолжит с того же места.
+- Акки с уже готовыми квестами скипаются мгновенно (1 GET /api/quests).
+- Квест = agent-сессия (gpt-5.6-luna, effort low) + poll `/api/quests` до
+  `completed: true`. Проверено на новом сайте 2026-10-04: +300cr/квест.
+- Прогон 2026-10-05: 61,500cr за первые ~1.5ч (71/271 акков).
+
+## Деплой на VPS (фарм-сервер)
+
+```bash
+python deploy_conol_gateway.py --selfcheck          # офлайн-проверка скрипта
+python deploy_conol_gateway.py                      # dry run плана
+python deploy_conol_gateway.py --apply              # установка + systemd + health
+python deploy_conol_gateway.py --apply --smoke      # + реальный инференс (stream+non-stream)
+python deploy_conol_gateway.py --sync --apply       # запушить пул + /pool/reload
+python deploy_conol_gateway.py --channel --apply    # создать/обновить канал в new-api + test
+```
+
+Целевой хост: VPS 13.143.162.135 (new-api за api.reformboss.com), через
+`tmp/_gwssh.py`. Сервис: `/etc/systemd/system/conol-pool.service` →
+`/opt/conol-pool/` (конфиги 0600, ключ генерится на VPS `openssl rand -hex 24`).
+На VPS уходит ТОЛЬКО проекция пула (name/session_token/expires/status/credits) —
+cookies и email не покидают машину. Канал new-api: `conol-farm-pool`, группа
+`conol` (изоляция от default), 14 моделей. Admin-токен new-api берётся из
+`/root/.secrets/newapi_admin_token` (легаси `/opt/grok-gateway/admin_token.txt` — фолбэк).
+
 ## Порты
 
 | Сервис | Порт |
