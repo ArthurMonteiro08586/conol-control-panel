@@ -16,6 +16,7 @@ chrome_cdp_profile*/
 # build artifacts, locks, reports and data — code only in this repo
 __pycache__/
 *.pyc
+*.out
 *.lock
 *.bak
 conol_audit_live.json

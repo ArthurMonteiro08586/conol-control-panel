@@ -1,4 +1,4 @@
-# ENI :: Conol Control Panel v7.1
+# ENI :: Conol Control Panel v7.2
 
 Автоматическая регистрация аккаунтов conol.ai + OpenAI-совместимый API-шлюз + веб-дашборд.
 
@@ -14,7 +14,25 @@ start_all.bat  ← Меню управления (регистрация, кве
 - **API:** http://127.0.0.1:9999/v1
 - **API ключ:** из `config.json` → `gateway.api_key`
 
-## Что нового в v7.1
+## Что нового в v7.2
+
+- **Эскалация капча-цепочки** — когда сервер отбивает токен провайдера
+  (`CAPTCHA_VERIFICATION_FAILED` 403), следующая попытка автоматически скипает
+  этого провайдера и уходит на платный AntiCaptcha (`solve(action, skip={...})`,
+  `LAST_PROVIDER`). Раньше холодный фри-токен жёг все 3 попытки.
+- **Фикс gmail-алиаса** — `email_prefix` в конфиге уже несёт `+conol`,
+  рег больше не выдаёт двойной `+conol+conol`.
+- **⚠️ Статус рега (2026-10-03): conol.ai перевёл reCAPTCHA в Enterprise-режим.**
+  Sitekey прежний (`6Lc3wmAt…`), токены минтятся с префиксом `0c` (Enterprise),
+  но бэкенд отбивает их 403 даже при **полном submit живой формы в реальном
+  Chrome** (проверено: человеческий submit → `CAPTCHA_VERIFICATION_FAILED`).
+  Это серверный скоринг по репутации IP/браузера, не баг клиента. Для рега
+  нужен чистый residential-IP; существующий пул полностью жив.
+- **Квест-фарм проверен на новом сайте** — `/api/quests` + agent-sessions
+  работают: на свежем аккаунте `note_written_by_agent` и `memory_written`
+  flipped → completed (+300cr каждый). ~8 квестов × 300cr доступны на акк.
+
+## Что было в v7.1
 
 - **Фри-капча (Chrome CDP)** — reCAPTCHA v3 токены минтятся в локальном Chrome
   с тёплым профилем (~0.5s/токен, $0). Платный AntiCaptcha остался фолбэком.
@@ -101,3 +119,15 @@ Tool-use: запрос с `tools` → шлюз инжектит XML-проток
 | API Gateway | 9999 |
 | Dashboard | 9988 |
 | Chrome CDP | 9228 |
+
+## Тесты
+
+```bash
+python test_conol_pool.py          # 559 проверок пула/ротации
+python test_gateway_tools.py       # tool-use шлюза
+python test_conol_pid_slot.py      # pid-lock слоты
+python test_conol_refresh_mutex.py # mutex refresh (25 проверок)
+python test_conol_scale_slot.py    # scale-дефицит логика
+```
+
+Все plain-скрипты (не pytest), exit 0 = pass. Прогон 2026-10-04: 5/5 green.
