@@ -48,7 +48,7 @@ start_all.bat  ← Меню управления (регистрация, кве
 
 | Файл | Что делает |
 |------|-----------|
-| `conol_gateway.py` | OpenAI-совместимый шлюз v4 (stdlib, порт 9999): 15 моделей, stream + tool-use (XML-эмуляция), ротация пула, rate-limit backoff |
+| `conol_gateway.py` | OpenAI-совместимый шлюз v4 (stdlib, порт 9999): 14 моделей (канал 865), stream + tool-use (XML-эмуляция), ротация пула, rate-limit backoff |
 | `conol_register.py` | Авторег: капча-цепочка, email-провайдеры, hop через занятые адреса, квест-кредиты |
 | `conol_captcha.py` | Решатель reCAPTCHA v3: chrome_cdp (free) → anticaptcha (paid) |
 | `conol_emails.py` | Провайдеры почты: gmail (+alias) / t-online.de (выделенные ящики), IMAP-поллер verify-ссылок |
@@ -166,4 +166,4 @@ python test_conol_refresh_mutex.py # mutex refresh (25 проверок)
 python test_conol_scale_slot.py    # scale-дефицит логика
 ```
 
-Все plain-скрипты (не pytest), exit 0 = pass. Прогон 2026-10-04: 5/5 green.
+Все plain-скрипты (не pytest), exit 0 = pass. Прогон 2026-10-05: selfcheck 79/79 (all blocks passed), gateway_tools 18/18, остальные 559/559, 25/25, 0/0.
