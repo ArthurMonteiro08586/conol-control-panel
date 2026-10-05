@@ -166,4 +166,4 @@ python test_conol_refresh_mutex.py # mutex refresh (25 проверок)
 python test_conol_scale_slot.py    # scale-дефицит логика
 ```
 
-Все plain-скрипты (не pytest), exit 0 = pass. Прогон 2026-10-05: selfcheck 79/79 (all blocks passed), gateway_tools 18/18, остальные 559/559, 25/25, 0/0.
+Все plain-скрипты (не pytest), exit 0 = pass. Прогон 2026-10-05: pool 559/559, pid 9/9, mutex 25/25, scale all blocks, gateway_tools 18/18, selfcheck 79/79.
