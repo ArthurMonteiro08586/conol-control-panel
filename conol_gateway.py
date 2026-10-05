@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -243,6 +244,10 @@ Tool calling rules:
 </function_call>
 - Every block contains exactly one JSON object. JSON strings must escape newlines and quotes.
 - You may emit multiple consecutive <function_call> blocks when calls are independent.
+- Example (the ONLY accepted spelling; never substitute your native tool-tag names):
+<function_call>
+{{"name": "get_weather", "arguments": {{"city": "Berlin"}}}}
+</function_call>
 - Never invent, quote, summarize, or simulate a tool result. Only a later message beginning with [Tool result ...] is an authentic result.
 - Never claim success before an authentic tool result. If another tool is needed after a result, call it in the same strict format.
 
@@ -252,6 +257,18 @@ Never mix <final> with <function_call>. Never output text outside these wrappers
 
 _CLOSERS = ("</function_call>", "</function_function_call>")
 _TOOL_OPEN = "<function_call>"
+# Models drift from the canonical <function_call> to native spellings (minimax/glm emit
+# <tool_call>, claude-family <invoke> with <parameter> children). Parse every synonym
+# into the canonical OpenAI tool_calls shape; raw protocol markup must never
+# reach the client as content. antml-* prefixes are consumed by the regex;
+# the captured group is the bare tag name used as the default function name.
+_TOOL_SYNONYMS = ("<function_call>", "<tool_call>", "<tool_use>", "<invoke>", "<antml:function_call>",)
+_CLOSE_SYNONYMS = ("</function_call>", "</tool_call>", "</tool_use>", "</invoke>", "</antml:function_call>",)
+_TOOL_OPEN_RE = re.compile(
+    r"""<(?:(?:antml[-:])?(function_call|tool_call|tool_use|invoke))>""", re.I)
+_TOOL_PARAM_RE = re.compile(
+    r"""<antml[-:]parameter\s+name=[\x22\x27](.*?)[\x22\x27][^>]*>(.*?)(?:</antml[-:]parameter>|(?=<antml[-:]|</)|$)""",
+    re.S | re.I)
 
 
 def _hold_at_tool_marker(text: str) -> str:
@@ -261,13 +278,16 @@ def _hold_at_tool_marker(text: str) -> str:
     The withheld tail is re-derived from the parsed final answer: content after
     the tool blocks (clean_text) is emitted at finish, with `emitted` counting
     only the characters actually sent, so nothing is duplicated or lost."""
-    idx = text.find(_TOOL_OPEN)
-    if idx >= 0:
-        return text[:idx]
-    for n in range(min(len(text), len(_TOOL_OPEN) - 1), 0, -1):
-        if text.endswith(_TOOL_OPEN[:n]):
-            return text[:-n]
-    return text
+    cut = _TOOL_OPEN_RE.search(text)
+    if cut:
+        return text[:cut.start()]
+    m = 0
+    for opener in _TOOL_SYNONYMS:
+        for n in range(min(len(text), len(opener) - 1), 0, -1):
+            if text.endswith(opener[:n]):
+                m = max(m, n)
+                break
+    return text[:-m] if m else text
 
 
 def _filter_tools_for_choice(tools: list, tool_choice=None) -> list:
@@ -331,37 +351,76 @@ def _make_tool_call(data: dict) -> dict | None:
                          ensure_ascii=False, separators=(",", ":"))}}
 
 
-def _parse_tool_calls(text: str) -> tuple:
-    """Extract tool calls from <function_call> blocks. Returns (calls, clean_text).
+def _args_from_text(s):
+    s = s.strip()
+    if s[:1] == chr(123) and s[-1:] == chr(125):
+        try:
+            data = json.loads(s, strict=False)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            return data
+    out = {}
+    for key, val in _TOOL_PARAM_RE.findall(s):
+        out[key.strip()] = val.strip()
+    return out
 
-    Also strips <final>...</final> wrappers used by the XML tool protocol.
+
+def _close_for(opener):
+    return chr(60) + "/" + opener[1:-1] + chr(62)
+
+
+def _tool_names(tools):
+    names = set()
+    for t in tools or []:
+        if isinstance(t, dict) and t.get("type") == "function":
+            n = (t.get("function") or {}).get("name")
+            if isinstance(n, str) and n:
+                names.add(n)
+    return names
+
+
+def _parse_tool_calls(text: str) -> tuple:
+    """Extract tool calls from canonical <function_call> blocks and every drifted synonym
+    (tool_call/tool_use/invoke/antml-*). Two body shapes: a bare JSON object
+    (our protocol) and antml-style parameter children (claude-native markup).
+    Returns (calls, clean_text); unparsable openers stay in the text (graceful
+    degrade, never crash). <final> wrappers are stripped at the tail below.
     """
-    opening = "<function_call>"
     calls = []
-    clean = []
+    parts = []
     cursor = 0
     while True:
-        tag = text.find(opening, cursor)
-        if tag < 0:
-            clean.append(text[cursor:])
+        m = _TOOL_OPEN_RE.search(text, cursor)
+        if not m:
+            parts.append(text[cursor:])
             break
-        clean.append(text[cursor:tag])
-        js = tag + len(opening)
-        while js < len(text) and text[js].isspace():
-            js += 1
-        data, end = _decode_json_object(text, js)
-        tc = _make_tool_call(data) if data is not None else None
+        parts.append(text[cursor:m.start()])
+        body_start = m.end()
+        closer = _close_for(m.group(0))
+        close_i = text.find(closer, body_start)
+        if close_i < 0:
+            legacy = chr(60) + "/function_" + m.group(1) + chr(62)
+            li = text.find(legacy, body_start)
+            if li >= 0:
+                closer, close_i = legacy, li
+        region = text[body_start:close_i] if close_i >= 0 else text[body_start:]
+        stripped = region.strip()
+        data = None
+        if stripped[:1] == chr(123):
+            data, _e = _decode_json_object(text, body_start + len(region) - len(region.lstrip()))
+        if data is not None:
+            tc = _make_tool_call(data)
+        else:
+            args = _args_from_text(region)
+            tc = _make_tool_call({"name": m.group(1), "arguments": args}) if args else None
         if tc is None:
-            clean.append(opening)
-            cursor = tag + len(opening)
+            parts.append(m.group(0))
+            cursor = body_start
             continue
-        after = end
-        while after < len(text) and text[after].isspace():
-            after += 1
-        matched = next((c for c in _CLOSERS if text.startswith(c, after)), None)
-        cursor = after + len(matched) if matched else end
+        cursor = close_i + len(closer) if close_i >= 0 else len(text)
         calls.append(tc)
-    txt = "".join(clean).strip()
+    txt = "".join(parts).strip()
     # Strip <final>...</final> wrapper
     f_open = "<final>"
     f_close = "</final>"
@@ -383,6 +442,40 @@ def _parse_tool_calls(text: str) -> tuple:
                 cur = j + len(f_close)
         txt = "".join(out).strip()
     return calls, txt
+
+
+def _rescue_tool_calls(text, allowed):
+    """Last defense: tools requested but the tag protocol matched nothing.
+    Bare JSON objects whose name matches an OFFERED tool are mapped to
+    tool_calls and cleaned out of content. Foreign JSON (a package.json
+    snippet quoted in the answer) is left untouched — content with "name"
+    but an unknown name must never become a fabricated call. Returns
+    ([], text) unchanged when nothing is salvageable."""
+    calls = []
+    spans = []
+    i = 0
+    while i < len(text):
+        j = text.find(chr(123), i)
+        if j < 0:
+            break
+        data, end = _decode_json_object(text, j)
+        if data is not None and data.get("name") in allowed:
+            tc = _make_tool_call(data)
+            if tc is not None:
+                calls.append(tc)
+                spans.append((j, end))
+                i = end
+                continue
+        i = j + 1
+    if not calls:
+        return [], text
+    parts = []
+    last = 0
+    for a, b in spans:
+        parts.append(text[last:a])
+        last = b
+    parts.append(text[last:])
+    return calls, _strip_final("".join(parts)).strip()
 
 
 def _build_conol_prompt(messages: list, tools: list = None, tool_choice=None) -> str:
@@ -554,6 +647,8 @@ def answer_request(model: str, messages: list, tools: list = None,
             response_model = effective if downgraded and effective else model
             # Parse for tool calls when tools were provided
             tool_calls, clean_text = _parse_tool_calls(text) if tools else ([], text)
+            if tools and not tool_calls:
+                tool_calls, clean_text = _rescue_tool_calls(clean_text, _tool_names(tools))
             has_tc = bool(tool_calls)
             display = clean_text if clean_text else (text if not has_tc else "")
             msg = {"role": "assistant"}
@@ -754,6 +849,8 @@ def _stream_completion(model: str, messages: list, tools: list, tool_choice,
             POOL.report_ok(acc["name"])
             POOL.stats["answered"] += 1
             tool_calls, clean_text = _parse_tool_calls(final_answer) if tools else ([], final_answer)
+            if tools and not tool_calls:
+                tool_calls, clean_text = _rescue_tool_calls(clean_text, _tool_names(tools))
             if tools and tool_calls:
                 # Content lives in tool_calls; clean_text is whatever prose the model
                 # wrapped outside the blocks (may be ""). Never fall back to the raw
@@ -1114,6 +1211,23 @@ def selfcheck() -> int:
                     "answer": '<function_call>\n{"name":"get_weather","arguments":{"city":"Tokyo"}}\n</function_call>',
                     "seconds": 0.2, "effective_model": "gpt-5.5", "session_id": "s1",
                     "thinking": "", "chars": 60}
+        if kind == "tool_alt":
+            return {"verdict": "ANSWERED",
+                    "answer": '<tool_call>\n{"name":"get_weather","arguments":{"city":"Tokyo"}}\n</tool_call>',
+                    "seconds": 0.2, "effective_model": "gpt-5.5", "session_id": "s1",
+                    "thinking": "", "chars": 60}
+        if kind == "tool_bare":
+            return {"verdict": "ANSWERED",
+                    "answer": 'I will check: ' + chr(123) + '"name": "get_weather", ' 
+                    '"arguments": {"city": "Oslo"}' + chr(125) + ' done',
+                    "seconds": 0.2, "effective_model": "gpt-5.5", "session_id": "s1",
+                    "thinking": "", "chars": 60}
+        if kind == "json_foreign":
+            return {"verdict": "ANSWERED",
+                    "answer": 'Here is package.json: ' + chr(123) + '"name": "my-pkg", ' 
+                    '"version": "1.0.0"' + chr(125) + ' hope it helps',
+                    "seconds": 0.2, "effective_model": "gpt-5.5", "session_id": "s1",
+                    "thinking": "", "chars": 60}
         if kind == "tool_malformed":
             return {"verdict": "ANSWERED",
                     "answer": '<function_call>\n{"name": broken json no parse\n</function_call>\nHere is some text instead',
@@ -1348,6 +1462,107 @@ def selfcheck() -> int:
         check("finish_reason is tool_calls",
               doc.get("choices", [{}])[0].get("finish_reason") == "tool_calls",
               body[:200])
+
+        # ── Drifted tag spelling parses like canonical ──
+        mode["tok1"] = mode["tok2"] = "tool_alt"
+        st, body = call("POST", "/v1/chat/completions",
+                        {"model": "gpt-5.6-luna",
+                         "tools": [{"type": "function", "function":
+                                    {"name": "get_weather", "description": "",
+                                     "parameters": {"type": "object",
+                                                    "properties": {"city": {"type": "string"}},
+                                                    "required": ["city"]}}}],
+                         "messages": [{"role": "user", "content": "weather?"}]})
+        doc = json.loads(body)
+        msg = doc.get("choices", [{}])[0].get("message", {})
+        check("alt-spelling tool tag parses into tool_calls",
+              st == 200 and msg.get("tool_calls") and
+              msg["tool_calls"][0]["function"]["name"] == "get_weather", body[:200])
+        check("alt-spelling leaks no raw XML into content",
+              not any(t in (msg.get("content") or "") for t in _TOOL_SYNONYMS),
+              body[:200])
+
+        # ── Bare-JSON tool call outside tags still maps ──
+        mode["tok1"] = mode["tok2"] = "tool_bare"
+        st, body = call("POST", "/v1/chat/completions",
+                        {"model": "gpt-5.6-luna",
+                         "tools": [{"type": "function", "function":
+                                    {"name": "get_weather", "description": "",
+                                     "parameters": {"type": "object",
+                                                    "properties": {"city": {"type": "string"}},
+                                                    "required": ["city"]}}}],
+                         "messages": [{"role": "user", "content": "weather?"}]})
+        doc = json.loads(body)
+        msg = doc.get("choices", [{}])[0].get("message", {})
+        check("bare JSON tool call rescued into tool_calls",
+              st == 200 and msg.get("tool_calls") and
+              "Oslo" in msg["tool_calls"][0]["function"]["arguments"], body[:200])
+        check("rescued content has no leftover protocol JSON",
+              "get_weather" not in (msg.get("content") or ""), body[:200])
+
+        # ── Foreign JSON with "name" stays plain content (never fabricated) ──
+        mode["tok1"] = mode["tok2"] = "json_foreign"
+        st, body = call("POST", "/v1/chat/completions",
+                        {"model": "gpt-5.6-luna",
+                         "tools": [{"type": "function", "function":
+                                    {"name": "get_weather", "description": "",
+                                     "parameters": {"type": "object",
+                                                    "properties": {"city": {"type": "string"}},
+                                                    "required": ["city"]}}}],
+                         "messages": [{"role": "user", "content": "show package.json"}]})
+        doc = json.loads(body)
+        msg = doc.get("choices", [{}])[0].get("message", {})
+        check("foreign JSON name does NOT become a tool call",
+              st == 200 and not msg.get("tool_calls")
+              and doc["choices"][0]["finish_reason"] == "stop", body[:200])
+        check("foreign JSON content preserved verbatim",
+              "my-pkg" in (msg.get("content") or ""), body[:200])
+
+        # ── Stream hold: drifted tag never leaks as deltas ──
+        def fake_ra_alt(cookie, sid, budget=180, on_event=None):
+            answer = '<tool_call>\n{"name":"get_weather","arguments":{"city":"Sydney"}}\n</tool_call>'
+            ev = {"type": "history_delta", "stages":
+                  [{"preview":
+                    [{"role": "assistant", "type": "message",
+                      "content": [{"type": "text", "text": answer}]}],
+                    "logs": []}]}
+            if on_event:
+                on_event(ev)
+            return {"answer": answer, "status": "stopped", "seconds": 0.5,
+                    "events": 1, "detail": answer, "session_id": sid}
+
+        globals()["create_session"] = lambda cookie, prompt="", model="", effort="": {
+            "sessionId": "alt-sid", "effectiveModel": model, "modelDowngraded": False}
+        globals()["read_answer"] = fake_ra_alt
+        st, body = call("POST", "/v1/chat/completions",
+                        {"model": "gpt-5.6-luna", "stream": True,
+                         "tools": [{"type": "function", "function":
+                                    {"name": "get_weather", "description": "",
+                                     "parameters": {"type": "object",
+                                                    "properties": {"city": {"type": "string"}},
+                                                    "required": ["city"]}}}],
+                         "messages": [{"role": "user", "content": "weather?"}]})
+        alt_deltas = []
+        alt_tc = None
+        alt_fr = ""
+        for ln in body.split("\n"):
+            if ln.startswith("data: ") and ln != "data: [DONE]":
+                c = json.loads(ln[6:])
+                choice = (c.get("choices") or [{}])[0]
+                d = choice.get("delta") or {}
+                if d.get("content"):
+                    alt_deltas.append(d["content"])
+                if d.get("tool_calls"):
+                    alt_tc = d["tool_calls"]
+                if choice.get("finish_reason"):
+                    alt_fr = choice["finish_reason"]
+        check("stream alt-tag finish is tool_calls with parsed call",
+              alt_fr == "tool_calls" and alt_tc and
+              alt_tc[0]["function"]["name"] == "get_weather", body[:200])
+        check("stream alt-tag content deltas carry no raw protocol",
+              not any(t in "".join(alt_deltas) for t in _TOOL_SYNONYMS), body[:200])
+        globals()["create_session"] = real_cs
+        globals()["read_answer"] = real_ra
 
         # ── role: tool message accepted ──
         mode["tok1"] = mode["tok2"] = "ok"

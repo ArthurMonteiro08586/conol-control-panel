@@ -350,6 +350,13 @@ def _load_cookies(path: str) -> dict:
 
 # ─── Tool Use: XML-based emulation ─────────────────────────────────────────
 
+# Models drift from the canonical <function_call> to native spellings (minimax/glm
+# emit <tool_call>, claude-family <invoke> with <parameter> children). Parse every
+# synonym into the canonical OpenAI tool_calls shape; raw protocol markup must never
+# reach the client as content.
+_TOOL_OPEN_RE = re.compile(
+    r"""<(?:(?:antml[-:])?(function_call|tool_call|tool_use|invoke))>""", re.I)
+
 TOOL_XML_HEADER = """<tools>
 {tool_defs}
 </tools>
@@ -363,6 +370,10 @@ Tool calling rules:
 </function_call>
 - Every block contains exactly one JSON object. JSON strings must escape newlines and quotes.
 - You may emit multiple consecutive <function_call> blocks when calls are independent.
+- Example (the ONLY accepted spelling; never substitute your native tool-tag names):
+<function_call>
+{{"name": "get_weather", "arguments": {{"city": "Berlin"}}}}
+</function_call>
 - Never invent, quote, summarize, or simulate a tool result. Only a later message beginning with [Tool result ...] is an authentic result.
 - Never claim success before an authentic tool result. If another tool is needed after a result, call it in the same strict format.
 
@@ -446,38 +457,45 @@ def _make_tool_call(data: dict) -> dict | None:
 
 
 def _parse_tool_calls(text: str) -> tuple[list[dict], str]:
-    """Extract every valid function-call object and remove its markup from text."""
-    opening = "<function_call>"
-    closers = ("</function_call>", "</function_function_call>")
+    """Extract tool calls from canonical <function_call> blocks and every drifted
+    synonym (tool_call/tool_use/invoke/antml-*). Returns (calls, clean_text);
+    unparsable openers stay in the text (graceful degrade, never crash)."""
     tool_calls = []
     clean_parts = []
     cursor = 0
 
     while True:
-        tag_start = text.find(opening, cursor)
-        if tag_start < 0:
+        m = _TOOL_OPEN_RE.search(text, cursor)
+        if not m:
             clean_parts.append(text[cursor:])
             break
-
-        clean_parts.append(text[cursor:tag_start])
-        json_start = tag_start + len(opening)
-        while json_start < len(text) and text[json_start].isspace():
-            json_start += 1
-        data, json_end = _decode_json_object(text, json_start)
+        clean_parts.append(text[cursor:m.start()])
+        body_start = m.end()
+        tag_name = m.group(1)
+        closer = "</" + tag_name + ">"
+        legacy = "</function_" + tag_name + ">"
+        # Search for closer only up to the next potential opener (prevents
+        # cross-block matches when two blocks use different tag spellings).
+        nm = _TOOL_OPEN_RE.search(text, body_start)
+        search_end = nm.start() if nm else len(text)
+        close_i = text.find(closer, body_start, search_end)
+        if close_i < 0:
+            li = text.find(legacy, body_start, search_end)
+            if li >= 0:
+                closer, close_i = legacy, li
+        region = text[body_start:close_i] if close_i >= 0 else text[body_start:]
+        stripped = region.strip()
+        data = None
+        json_end = body_start
+        if stripped[:1] == "{":
+            json_start = body_start + len(region) - len(region.lstrip())
+            data, json_end = _decode_json_object(text, json_start)
         tool_call = _make_tool_call(data) if data is not None else None
         if tool_call is None:
-            clean_parts.append(opening)
-            cursor = tag_start + len(opening)
+            clean_parts.append(m.group(0))
+            cursor = body_start
             continue
-
-        after_json = json_end
-        while after_json < len(text) and text[after_json].isspace():
-            after_json += 1
-        matched_closer = next(
-            (closer for closer in closers if text.startswith(closer, after_json)),
-            None,
-        )
-        cursor = after_json + len(matched_closer) if matched_closer else json_end
+        cursor = close_i + len(closer) if close_i >= 0 else json_end
         tool_calls.append(tool_call)
 
     return tool_calls, "".join(clean_parts).strip()
@@ -541,7 +559,6 @@ def _tool_repair_message(validation_errors: list[str]) -> dict:
 class _ToolCallStreamFilter:
     """Stream explicit final text while withholding all ambiguous/tool output."""
 
-    _tool_open = "<function_call>"
     _final_open = "<final>"
     _final_close = "</final>"
 
@@ -582,7 +599,8 @@ class _ToolCallStreamFilter:
             return self._feed_final(delta)
 
         self._buffer += delta
-        tool_at = self._buffer.find(self._tool_open)
+        tool_match = _TOOL_OPEN_RE.search(self._buffer)
+        tool_at = tool_match.start() if tool_match else -1
         final_at = self._buffer.find(self._final_open)
 
         if tool_at >= 0 and (final_at < 0 or tool_at < final_at):
