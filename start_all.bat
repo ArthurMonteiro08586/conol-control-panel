@@ -1,13 +1,14 @@
 @echo off
 chcp 65001 >nul 2>&1
-title ENI :: Conol Control Panel v7.0
+set PYTHONPATH=
+title ENI :: Conol Control Panel v7.2
 color 0C
 
 :menu
 cls
 echo.
 echo  ╔══════════════════════════════════════════════════════════════╗
-echo  ║         ENI :: CONOL CONTROL PANEL v7.0                      ║
+echo  ║         ENI :: CONOL CONTROL PANEL v7.2                      ║
 echo  ║         Autoreg + API Gateway + Dashboard                    ║
 echo  ╚══════════════════════════════════════════════════════════════╝
 echo.
@@ -22,6 +23,10 @@ echo  │ [5]  Массовая рег из email-очереди                
 echo  │ [6]  Добавить email в очередь                               │
 echo  ├─ ФАРМ ─────────────────────────────────────────────────────┤
 echo  │ [7]  Сфармить квесты на всех аккаунтах                      │
+echo  ├─ VPS (ФАРМ-СЕРВЕР) ─────────────────────────────────────────┤
+echo  │ [V]  Задеплоить/обновить gateway на VPS                     │
+echo  │ [S]  Синхронизировать пул на VPS (новые акки+кредиты)       │
+echo  │ [H]  Health VPS-сервера                                     │
 echo  ├─ FULL CYCLE ────────────────────────────────────────────────┤
 echo  │ [F]  FULL CYCLE: CDP + Reg N + Quests + Gateway             │
 echo  ├─ СТАТУС ────────────────────────────────────────────────────┤
@@ -42,6 +47,9 @@ if "%choice%"=="4" goto reg_n
 if "%choice%"=="5" goto reg_multi
 if "%choice%"=="6" goto add_email
 if "%choice%"=="7" goto quests
+if /i "%choice%"=="V" goto deploy_vps
+if /i "%choice%"=="S" goto sync_vps
+if /i "%choice%"=="H" goto health_vps
 if "%choice%"=="8" goto status
 if "%choice%"=="9" goto test_all
 if "%choice%"=="0" goto open_browser
@@ -57,7 +65,8 @@ echo  [+] Запускаю Chrome CDP (порт 9228)...
 call chrome_cdp.bat
 timeout /t 2 /nobreak >nul
 echo  [+] Запускаю Gateway (порт 9999)...
-start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u conol_gateway.py"
+call :load_pool_key
+start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=%POOL_KEY% && python -u conol_gateway.py"
 timeout /t 2 /nobreak >nul
 echo  [+] Запускаю Dashboard (порт 9988)...
 start "ENI Dashboard" /min cmd /c "python -u dashboard_server.py"
@@ -98,11 +107,12 @@ if "%fc_count%"=="" set fc_count=3
 echo  [2/5] Регистрирую %fc_count% аккаунтов...
 python -X utf8 -u conol_register.py --count %fc_count%
 echo.
-echo  [3/5] Фарм квестов...
-python -u eni_conol.py quests
+echo  [3/5] Фарм квестов (resumable)...
+python -X utf8 -u conol_quest_farm.py
 echo.
 echo  [4/5] Запускаю Gateway...
-start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u conol_gateway.py"
+call :load_pool_key
+start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=%POOL_KEY% && python -u conol_gateway.py"
 timeout /t 2 /nobreak >nul
 echo  [5/5] Запускаю Dashboard...
 start "ENI Dashboard" /min cmd /c "python -u dashboard_server.py"
@@ -122,7 +132,8 @@ goto menu
 :start_gw
 echo.
 echo  [+] Запускаю Gateway...
-set ENI_POOL_KEY=test
+call :load_pool_key
+set ENI_POOL_KEY=%POOL_KEY%
 python -u conol_gateway.py
 pause
 goto menu
@@ -136,7 +147,7 @@ goto menu
 
 :reg_n
 echo.
-set /p regcount="Сколько аккаунтов注册ить? (default 5): "
+set /p regcount="Сколько аккаунтов зарегистрировать? (default 5): "
 if "%regcount%"=="" set regcount=5
 set /p regprov="Email провайдер? [1] auto [2] gmail [3] t-online (default auto): "
 set PROVARG=
@@ -173,10 +184,34 @@ echo.
 pause
 goto menu
 
+:deploy_vps
+echo.
+echo  [+] Деплой gateway на VPS (apply + smoke)...
+python -X utf8 -u deploy_conol_gateway.py --apply --smoke
+echo.
+pause
+goto menu
+
+:sync_vps
+echo.
+echo  [+] Синхронизация пула на VPS...
+python -X utf8 -u deploy_conol_gateway.py --sync --apply
+echo.
+pause
+goto menu
+
+:health_vps
+echo.
+echo  [+] Health VPS-сервера...
+python -X utf8 -u deploy_conol_gateway.py --selfcheck
+echo.
+pause
+goto menu
+
 :quests
 echo.
-echo  [+] Запускаю фарм квестов на всех аккаунтах...
-python -u eni_conol.py quests
+echo  [+] Запускаю фарм квестов на всех аккаунтах (resumable)...
+python -X utf8 -u conol_quest_farm.py
 echo.
 pause
 goto menu
@@ -220,3 +255,8 @@ echo  ✅ Остановлено.
 echo.
 pause
 goto menu
+
+:load_pool_key
+for /f "delims=" %%k in ('python -c "import json;print(json.load(open('config.json'))['gateway']['api_key'])" 2^>nul') do set POOL_KEY=%%***
+if "%POOL_KEY%"=="" set POOL_KEY=test
+goto :eof

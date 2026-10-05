@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul 2>&1
+set PYTHONPATH=
 title ENI :: Conol One-Click Start
 color 0C
 
@@ -16,7 +17,9 @@ call chrome_cdp.bat
 timeout /t 3 /nobreak >nul
 
 echo  [2/4] Запускаю Gateway (порт 9999)...
-start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=test && python -u conol_gateway.py"
+for /f "delims=" %%k in ('python -c "import json;print(json.load(open('config.json'))['gateway']['api_key'])" 2^>nul') do set POOL_KEY=%%k
+if "%POOL_KEY%"=="" set POOL_KEY=test
+start "ENI Gateway" /min cmd /c "set ENI_POOL_KEY=%POOL_KEY% && python -u conol_gateway.py"
 timeout /t 2 /nobreak >nul
 
 echo  [3/4] Запускаю Dashboard (порт 9988)...
@@ -31,7 +34,7 @@ echo  ════════════════════════�
 echo  ✅ CDP:       http://127.0.0.1:9228
 echo  ✅ API:       http://127.0.0.1:9999/v1
 echo  ✅ Dashboard: http://127.0.0.1:9988
-echo  ✅ API ключ:  test
+echo  ✅ API ключ:  %POOL_KEY%
 echo  ═══════════════════════════════════════════════════
 echo.
 echo  Для управления: start_all.bat

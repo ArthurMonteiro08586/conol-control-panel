@@ -7,9 +7,10 @@ Usage: python -X utf8 conol_quest_farm.py
 import json, sys, time, urllib.request, urllib.error
 from pathlib import Path
 
-repo = Path(r"C:\Users\User\Desktop\_PROJECTS\conol_autoreg")
-STATE = Path(__file__).resolve().parent / "conol_quest_farm_state.json"
-rows = [json.loads(l) for l in (repo / "conol_accounts_pool.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+repo = Path(__file__).resolve().parent
+POOL = repo / "conol_accounts_pool.jsonl"
+STATE = repo / "conol_quest_farm_state.json"
+rows = [json.loads(l) for l in POOL.read_text(encoding="utf-8").splitlines() if l.strip()]
 live = [r for r in rows if r.get("status") == "live" and r.get("cookies_path") and Path(r["cookies_path"]).exists()]
 
 EASY = {
