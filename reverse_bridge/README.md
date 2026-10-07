@@ -1,40 +1,51 @@
 # Reverse Bridge — conol-агент видит твой ПК
 
-Реверс-схема: мозг агента на conol-серверах (бесплатные кредиты из пула),
-исполнитель — этот воркер на ПК. ПК сам ходит наружу, открытых портов нет.
+ДВЕ схемы (обе рабочие, проверено 07.10.2026):
 
-## Как работает
+## Схема A (основная, E2E verified): CF Tunnel + промпт-инжекция
+conol-модели исполняют tool-вызовы в СВОЕЙ e2b-песочнице (hostname e2b.local),
+поэтому нативный tool-use через гейтвей не форсит локальное исполнение.
+Рабочий путь: агенту в промпт даётся curl-инструкция + URL туннеля + токен.
 
 ```
-[conol.ai пул 271 акк] <- cookie/gateway
-        ^
-        |  /v1/chat/completions + tools (HTTP outbound)
-        v
-[agent_bridge.py на ПК]  ->  shell_exec / file_read / file_list / screenshot
-                              file_write (disabled by default)
+[conol-агент в e2b] --curl HTTPS--> [xxx.trycloudflare.com] --tunnel--> [pc_agent_server.py :18099 на ПК]
 ```
 
-Модель получает tool-схемы, шлёт tool_calls, воркер исполняет локально
-и возвращает результат. Цикл до финального ответа. Скриншот отдаётся
-мультимодально (data:image/png;base64) — модель буквально видит экран.
+E2E пруф: /info hostname=Nikita (НЕ e2b.local), /exec вернул 878 .session,
+/screenshot 433KB PNG через туннель. gpt-5.6-luna выполнил все 3 шага (163s).
 
-## Быстрый старт
+Запуск (Windows):
+```bash
+# 1. исполнитель на ПК
+python pc_agent_server.py --print-token     # токен в agent_token.txt
+
+# 2. туннель (ВАЖНО: --protocol http2 — QUIC рвётся на этом провайдере;
+#    --config ПУСТОЙ yml — иначе подхватится ~/.cloudflared/config.yml
+#    с named tunnel и quicktunnel-домен будет отдавать 404!)
+echo {} > cf_empty.yml
+cloudflared tunnel --config cf_empty.yml --no-autoupdate --metrics 127.0.0.1:20242 \
+  --protocol http2 --url http://127.0.0.1:18099
+# URL туннеля в логе: https://xxx.trycloudflare.com
+
+# или всё сразу: start_bridge.bat
+```
+
+Endpoints pc_agent_server (POST + заголовок X-Agent-Token):
+/exec, /read, /write (выкл по умолчанию), /list, /screenshot, /info, GET /health
+
+Пример промпта для conol-агента — см. `_e2e_cf.py` в корне проекта.
+
+## Схема B (эксперимент): XML tool-use через гейтвей
+`agent_bridge.py` шлёт OpenAI tools через conol_gateway :9999 (гейтвей
+конвертит в XML-промпт). Работает только если модель честно эмитит
+`<function_call>` — gpt-5.6-luna/deepseek-v4-flash склонны исполнять в своей
+песочнице вместо вызова инструмента. Держим как запасной путь.
 
 ```bash
-# 1. поднять гейтвей поверх пула (из корня проекта)
-python conol_gateway.py            # :9999
-
-# 2. конфиг
-cp config.example.json config.json   # config.json в .gitignore!
-
-# 3. самотест инструментов (без модели)
+python conol_gateway.py --host 127.0.0.1 --port 9999   # ENI_POOL_KEY=***
+cp config.example.json config.json
 python agent_bridge.py --selftest
-
-# 4. задача
-python agent_bridge.py "посчитай сколько .session файлов в C:/Users/User/.orca/sessions"
-
-# 5. интерактив с памятью диалога
-python agent_bridge.py --repl
+python agent_bridge.py "задача"
 ```
 
 ## Безопасность
