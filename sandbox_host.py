@@ -29,7 +29,7 @@ except ImportError:
     httpx = None
 
 GW_URL = os.environ.get("CONOL_GW", "http://127.0.0.1:9999/v1")
-GW_KEY = 'ENI_POOL_KEY'  # ENI_POOL_KEY literal — см. README reverse_bridge
+GW_KEY = "***"  # ENI_POOL_KEY literal — см. README reverse_bridge
 DEFAULT_MODEL = "deepseek-v4-flash"
 
 
@@ -57,11 +57,11 @@ def host_content(content, port=3000, model=DEFAULT_MODEL, serve_dir="/tmp/hosted
 
 1. mkdir -p {serve_dir} && echo '{b64}' | base64 -d > {serve_dir}/index.html && wc -c {serve_dir}/index.html
 
-2. pkill -f "http.server {port}" 2>/dev/null; cd {serve_dir} && nohup python3 -m http.server {port} --bind 0.0.0.0 > {serve_dir}/server.log 2>&1 & sleep 2; curl -s --max-time 5 http://127.0.0.1:{port}/ | head -2
+2. (cd {serve_dir} && setsid nohup python3 -m http.server {port} --bind 0.0.0.0 > {serve_dir}/server.log 2>&1 < /dev/null &) ; sleep 3; curl -s --max-time 5 http://127.0.0.1:{port}/ | head -2; ss -tlnp 2>/dev/null | grep :{port} | head -1
 
 3. echo HOSTID=$E2B_SANDBOX_ID
 
-4. ss -tlnp 2>/dev/null | grep :{port} | head -1"""
+Если curl вернул HTML и ss показал порт — задача выполнена, напечатай HOSTID и закончи."""
     t0 = time.time()
     ans = ask(prompt, model=model)
     dt = time.time() - t0
@@ -79,6 +79,8 @@ def host_content(content, port=3000, model=DEFAULT_MODEL, serve_dir="/tmp/hosted
     rec = {"sandbox_id": sid, "port": port, "url": url, "http_check": ok,
            "model": model, "seconds": round(dt, 1), "content_bytes": len(content),
            "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+    if not sid:
+        rec["raw_answer_tail"] = ans[-800:]
     return rec
 
 
